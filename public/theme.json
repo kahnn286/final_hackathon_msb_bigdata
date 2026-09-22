@@ -1,0 +1,29 @@
+{
+  "custom_fonts": [
+    "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+  ],
+  "variables": {
+    "dark": {
+      "--font-sans": "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+      "--background": "212 30% 7%",
+      "--foreground": "214 30% 92%",
+      "--card": "214 30% 10%",
+      "--card-foreground": "214 30% 92%",
+      "--popover": "214 30% 10%",
+      "--popover-foreground": "214 30% 92%",
+      "--primary": "201 100% 68%",
+      "--primary-foreground": "212 30% 7%",
+      "--secondary": "214 27% 13%",
+      "--secondary-foreground": "214 30% 92%",
+      "--muted": "214 27% 13%",
+      "--muted-foreground": "214 15% 65%",
+      "--accent": "214 27% 16%",
+      "--accent-foreground": "214 30% 92%",
+      "--destructive": "0 91% 71%",
+      "--border": "213 24% 18%",
+      "--input": "213 24% 18%",
+      "--ring": "201 100% 68%",
+      "--radius": "0.5rem"
+    }
+  }
+}

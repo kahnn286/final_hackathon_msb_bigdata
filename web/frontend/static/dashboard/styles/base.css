@@ -1,0 +1,148 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* Custom Scrollbar - Sleek, Dark & Modern */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  transition: background 150ms ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Typography tokens */
+.type-display { font-family: var(--font-mono); font-size: 28px; line-height: 34px; font-weight: 700; font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+.type-title   { font-size: 20px; line-height: 28px; font-weight: 700; }
+.type-h3      { font-size: 15px; line-height: 22px; font-weight: 600; }
+.type-body    { font-size: 14px; line-height: 22px; font-weight: 400; }
+.type-small   { font-size: 12px; line-height: 18px; font-weight: 500; }
+.type-mono-sm { font-family: var(--font-mono); font-size: 12px; line-height: 18px; font-weight: 500; }
+
+.text-muted   { color: var(--text-muted); }
+.text-subtle  { color: var(--text-subtle); }
+.text-ok      { color: var(--ok); }
+.text-warn    { color: var(--warn); }
+.text-danger  { color: var(--danger); }
+.text-accent  { color: var(--accent); }
+.text-checker { color: var(--checker); }
+
+/* SVG icon helper */
+.icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  stroke: currentColor;
+  fill: none;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.icon-20 { width: 20px; height: 20px; }
+
+/* Status Pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  height: 24px;
+  padding: 0 var(--s2);
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.status-pill.status-healthy { background: var(--ok-bg); color: var(--ok); border-color: rgba(52, 211, 153, 0.3); }
+.status-pill.status-investigating { background: var(--warn-bg); color: var(--warn); border-color: rgba(251, 191, 36, 0.3); }
+.status-pill.status-incident { background: var(--danger-bg); color: var(--danger); border-color: rgba(248, 113, 113, 0.3); }
+.status-pill.status-resolved { background: var(--ok-bg); color: var(--ok); border-color: rgba(52, 211, 153, 0.3); }
+.status-pill.status-sleep { background: var(--neutral-bg); color: var(--neutral); border-color: rgba(148, 163, 184, 0.3); }
+
+/* LED Dots */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.dot-healthy { background: var(--ok); }
+.status-dot.dot-investigating { background: var(--warn); animation: pulse-dot 2s infinite ease-in-out; }
+.status-dot.dot-incident { background: var(--danger); animation: pulse-dot 1.5s infinite ease-in-out; }
+.status-dot.dot-resolved { background: var(--ok); }
+.status-dot.dot-sleep { background: transparent; border: 1.5px solid var(--neutral); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.dot-investigating,
+  .status-dot.dot-incident {
+    animation: none;
+  }
+  * {
+    transition: none !important;
+  }
+}

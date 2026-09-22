@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Reliability Squad — DataOps Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="/static/dashboard/styles/tokens.css">
+  <link rel="stylesheet" href="/static/dashboard/styles/base.css">
+  <link rel="stylesheet" href="/static/dashboard/styles/components.css">
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-title">
+          <svg class="icon icon-20 text-accent"><use href="/static/dashboard/icons.svg#icon-shield-check"></use></svg>
+          <span>Data Reliability Squad</span>
+        </div>
+        <span class="chip-version">Maker · Checker v2.0</span>
+      </div>
+
+      <div class="topbar-right">
+        <div class="system-chips" id="topbarSystemChips">
+          <!-- Rendered by render.js -->
+        </div>
+
+        <div class="notification-wrapper">
+          <button class="btn-icon btn-notification" id="btnNotification" aria-label="Trung tâm thông báo" aria-expanded="false" title="Thông báo hệ thống">
+            <svg class="icon"><use href="/static/dashboard/icons.svg#icon-bell"></use></svg>
+            <span class="badge-count notif-badge" id="notifBadge" style="display: none;">1</span>
+          </button>
+          <div class="notification-dropdown" id="notificationDropdown" style="display: none;">
+            <div class="notif-dropdown-header">
+              <div class="notif-header-title">
+                <svg class="icon icon-16 text-accent"><use href="/static/dashboard/icons.svg#icon-bell"></use></svg>
+                <span>Thông báo & Cảnh báo</span>
+              </div>
+              <span class="notif-header-count" id="notifHeaderCount">1 mới</span>
+            </div>
+            <div class="notif-list" id="notifList">
+              <!-- Rendered dynamically by render.js -->
+            </div>
+            <div class="demo-control-card">
+              <div style="font-size: 11px; font-weight: 700; color: var(--text); display: flex; justify-content: space-between; align-items: center;">
+                <span>🎯 Cấy lỗi chủ động Demo (Tự động báo Telegram)</span>
+                <button class="btn-text" id="btnViewAllIncidents" style="font-size: 11px; color: var(--color-accent);">Tab Sự cố →</button>
+              </div>
+              <div class="demo-btn-grid">
+                <button class="demo-action-btn btn-red" onclick="window.injectDefect('mobile_app_v3', 'null_customer_id')" title="Cấy 15 dòng NULL customer_id từ Mobile SDK 3.4.1">
+                  <span>🔴</span> <span>Mobile App (NULL ID)</span>
+                </button>
+                <button class="demo-action-btn btn-amber" onclick="window.injectDefect('web_checkout', 'negative_amount')" title="Cấy 10 dòng Amount âm & sai status">
+                  <span>🟡</span> <span>Web Checkout (Amount < 0)</span>
+                </button>
+                <button class="demo-action-btn btn-purple" onclick="window.injectDefect('erp_core', 'duplicate_order')" title="Cấy 5 dòng trùng khóa order_id">
+                  <span>🟣</span> <span>ERP Core (Duplicate)</span>
+                </button>
+                <button class="demo-action-btn btn-red" onclick="window.injectDefect('all', 'auto')" title="Cấy lỗi đồng thời cả 3 nguồn">
+                  <span>💥</span> <span>Cả 3 Nguồn (Multi)</span>
+                </button>
+                <button class="demo-action-btn btn-green" onclick="window.resetCleanData()" title="Khôi phục dữ liệu sạch hoàn toàn">
+                  <span>🧹</span> <span>Khôi phục Kho Dữ Liệu Sạch (Reset All)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn-icon" id="btnRefresh" aria-label="Làm mới dữ liệu">
+          <svg class="icon"><use href="/static/dashboard/icons.svg#icon-refresh-cw"></use></svg>
+        </button>
+
+        <button class="btn-copilot" id="btnToggleCopilot" aria-pressed="false" aria-label="Mở Copilot SRE">
+          <svg class="icon"><use href="/static/dashboard/icons.svg#icon-panel-right-open"></use></svg>
+          <span>Copilot</span>
+          <span class="badge-count" id="copilotBadge">1</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="main-workspace">
+      
+      <!-- Content Scroll -->
+      <main class="content-scroll" role="main">
+        <div class="content-wrap">
+          
+          <!-- Incident Hero -->
+          <section id="incidentHero" class="hero-card hero-incident" aria-live="polite">
+            <!-- Rendered by render.js -->
+          </section>
+
+          <!-- KPI Strip -->
+          <section class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Tổng bản ghi</div>
+              <div class="kpi-value" id="kpiTotalRows">1,000</div>
+              <div class="kpi-sub" id="kpiTotalRowsSub">3 nguồn · fact_orders</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-label">Dòng vi phạm DQ</div>
+              <div class="kpi-value text-danger" id="kpiViolatingRows">15</div>
+              <div class="kpi-sub" id="kpiViolatingSub">not_null_customer_id</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-label">Đã cách ly</div>
+              <div class="kpi-value" id="kpiQuarantined">0 dòng</div>
+              <div class="kpi-sub" id="kpiQuarantinedSub">chờ duyệt · 0 mất</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-label">DQ tests đạt</div>
+              <div class="kpi-value" id="kpiDqTests">5 / 6</div>
+              <div class="kpi-sub" id="kpiDqSub">1 test không đạt</div>
+            </div>
+          </section>
+
+          <!-- Nguồn Dữ Liệu -->
+          <section>
+            <div class="section-head">
+              <h3 class="section-title">
+                <svg class="icon text-muted"><use href="/static/dashboard/icons.svg#icon-radio"></use></svg>
+                <span>Nguồn dữ liệu</span>
+              </h3>
+            </div>
+            <div class="sources-grid" id="sourcesGrid">
+              <!-- Rendered by render.js -->
+            </div>
+          </section>
+
+          <!-- Lineage & Squad/Guardrails -->
+          <section class="two-col-grid">
+            <div class="panel-card">
+              <div class="section-head">
+                <h3 class="section-title">
+                  <svg class="icon text-muted"><use href="/static/dashboard/icons.svg#icon-git-branch"></use></svg>
+                  <span>Lineage & blast radius</span>
+                </h3>
+              </div>
+              <div class="lineage-wrap" id="lineageSvgContainer">
+                <!-- Rendered by lineage.js -->
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="section-head">
+                <h3 class="section-title">
+                  <svg class="icon text-muted"><use href="/static/dashboard/icons.svg#icon-shield-check"></use></svg>
+                  <span>Đội Maker · Checker & Guardrails</span>
+                </h3>
+              </div>
+              <div id="squadGuardrailsPanel">
+                <!-- Rendered by render.js -->
+              </div>
+            </div>
+          </section>
+
+          <!-- Data Tabs -->
+          <section class="tabs-container">
+            <div class="tab-nav" role="tablist">
+              <button class="tab-btn" role="tab" aria-selected="true" data-target="tabTables">Bảng trong warehouse</button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-target="tabIncidents" id="tabBtnIncidents">
+                Sự cố & Cảnh báo <span class="tab-badge-pill" id="tabIncidentsBadge">1</span>
+              </button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-target="tabDq">DQ tests</button>
+              <button class="tab-btn" role="tab" aria-selected="false" data-target="tabActivity">Hoạt động của Agent</button>
+            </div>
+
+            <div class="tab-content-panel" id="tabTables">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Tên bảng</th>
+                    <th class="num">Số dòng</th>
+                    <th>DQ</th>
+                    <th>Cập nhật</th>
+                    <th>Khuyến nghị</th>
+                  </tr>
+                </thead>
+                <tbody id="tablesTableBody">
+                  <!-- Rendered by render.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="tab-content-panel" id="tabIncidents" style="display: none;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Mã sự cố</th>
+                    <th>Mức độ</th>
+                    <th>Tiêu đề & Nguồn</th>
+                    <th>Bảng ảnh hưởng</th>
+                    <th>Kênh thông báo</th>
+                    <th>Trạng thái</th>
+                    <th>Thời gian</th>
+                    <th class="num">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody id="incidentsTableBody">
+                  <!-- Rendered by render.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="tab-content-panel" id="tabDq" style="display: none;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Tên test</th>
+                    <th>Cột</th>
+                    <th>Loại</th>
+                    <th class="num">Vi phạm</th>
+                    <th>Trạng thái</th>
+                    <th>Lần chạy gần nhất</th>
+                  </tr>
+                </thead>
+                <tbody id="dqTestsTableBody">
+                  <!-- Rendered by render.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="tab-content-panel" id="tabActivity" style="display: none;">
+              <div id="activityLogList">
+                <!-- Rendered by render.js -->
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+
+      <!-- Copilot Dock Backdrop for mobile & tablet -->
+      <div class="dock-backdrop" id="dockBackdrop"></div>
+
+      <!-- Copilot Dock -->
+      <aside class="copilot-dock collapsed" id="copilotDock" role="complementary" aria-label="Copilot">
+        <div class="dock-resize-handle" id="dockResizeHandle" title="Kéo để chỉnh độ rộng"></div>
+
+        <div class="dock-header">
+          <div class="dock-header-left">
+            <div style="display: flex; gap: -4px;">
+              <span class="member-avatar avatar-maker" style="width: 22px; height: 22px; font-size: 10px;">M</span>
+              <span class="member-avatar avatar-checker" style="width: 22px; height: 22px; font-size: 10px; margin-left: -6px;">C</span>
+            </div>
+            <span class="dock-title">Copilot</span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: var(--s1);">
+            <button class="btn-icon" id="btnExpandCopilot" title="Mở rộng 60%">
+              <svg class="icon"><use href="/static/dashboard/icons.svg#icon-maximize-2"></use></svg>
+            </button>
+            <button class="btn-icon" id="btnCloseCopilot" title="Đóng Copilot (Esc)">
+              <svg class="icon"><use href="/static/dashboard/icons.svg#icon-x"></use></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="dock-context-bar" id="dockContextChip">
+          Ngữ cảnh: mobile_app_v3 · INC-2026-DQ01
+        </div>
+
+        <div class="dock-iframe-wrap">
+          <iframe class="dock-iframe" id="copilotIframe" title="Copilot Chat"></iframe>
+        </div>
+      </aside>
+
+    </div>
+  </div>
+
+  <script type="module" src="/static/dashboard/js/main.js"></script>
+</body>
+</html>

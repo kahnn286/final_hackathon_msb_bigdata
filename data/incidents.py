@@ -48,7 +48,6 @@ def build_incident_payload(
         )
 
     failures = int(scalar(check.count_sql, default=0) or 0)
-    # Dùng bảng mục tiêu động thay vì hardcode fact_orders
     target_table = check.model or "fact_orders"
     total = int(scalar(f"SELECT COUNT(*) AS c FROM {target_table}", default=0) or 0)
     run_id = latest_run_id() or "dq-run-unknown"
@@ -67,14 +66,58 @@ def build_incident_payload(
         max_rows=20,
     )["rows"]
 
+    sample_src = BROKEN_SOURCE
+    sample_ver = BROKEN_VERSION
+    if sample and isinstance(sample[0], dict):
+        sample_src = sample[0].get("source_system") or BROKEN_SOURCE
+        sample_ver = sample[0].get("app_version") or BROKEN_VERSION
+
+    # Tính tổng số dòng vi phạm của đúng nguồn này trong fact_orders để khớp 100% với Dashboard
+    try:
+        src_where = f"WHERE source_system = '{sample_src}'"
+        viol_res = scalar(
+            f"""
+            SELECT COUNT(*) FROM {target_table}
+            {src_where}
+            AND (
+                customer_id IS NULL 
+                OR customer_email IS NULL 
+                OR total_amount <= 0 
+                OR order_status NOT IN ('COMPLETED', 'PENDING', 'CANCELLED', 'REFUNDED')
+            )
+            """
+        )
+        dup_cnt = scalar(
+            f"SELECT COUNT(*) - COUNT(DISTINCT order_id) FROM {target_table} {src_where}"
+        )
+        src_viols = int(viol_res or 0) + int(dup_cnt or 0)
+        if src_viols > 0:
+            failures = src_viols
+    except Exception:
+        pass
+
+    log_tail = [
+        f"02:29:58 [INFO ] ingest_{sample_src}: pulling batch window 2026-09-15",
+        f"02:30:01 [WARN ] ingest_{sample_src}: field '{check.column_name}' missing/corrupted in {failures} payloads ({sample_ver})",
+        f"02:30:02 [INFO ] ingest_{sample_src}: loaded {failures} suspicious rows into staging",
+        f"02:30:44 [ERROR] dbt: FAIL {failures} {check.test_name}",
+        "02:30:44 [ERROR] dbt: Done. PASS=32 WARN=0 ERROR=4 SKIP=7 TOTAL=43",
+    ]
+
+    other_failed_summary = ""
+    if other_failed:
+        other_failed_summary = " Đồng thời phát hiện các DQ tests khác cùng fail: " + ", ".join(
+            f"`{r.get('test_name')}` ({r.get('failures')} dòng)" for r in other_failed
+        ) + "."
+
     return {
         "incident_id": incident_id or "INC-2026-DQ01",
         "incident_type": "DATA_QUALITY",
         "target_table": f"main.{check.model}",
         "source": "dbt",
         "description": (
-            f"dbt test FAILED: test `{check.test_name}` phát hiện {failures} dòng vi phạm "
-            f"trên tổng {total} dòng của bảng {check.model}. "
+            f"dbt test FAILED: test `{check.test_name}` phát hiện tổng cộng {failures} dòng vi phạm trên nguồn [{sample_src}] "
+            f"trên tổng {total} dòng của bảng {check.model}.{other_failed_summary} "
             "Job dbt build chạy lúc 02:30 ngày 2026-09-15 bị dừng, các mart hạ nguồn "
             "(mart_daily_revenue, mart_customer_ltv) đang giữ dữ liệu không nhất quán."
         ),
@@ -100,10 +143,10 @@ def build_incident_payload(
                 for row in other_failed
             ],
             "upstream_hint": {
-                "source_system": BROKEN_SOURCE,
-                "source_version": BROKEN_VERSION,
+                "source_system": sample_src,
+                "source_version": sample_ver,
             },
-            "pipeline_log_tail": PIPELINE_LOG_TAIL,
+            "pipeline_log_tail": log_tail,
         },
     }
 

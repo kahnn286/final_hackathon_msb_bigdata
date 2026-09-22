@@ -274,37 +274,28 @@ def welcome_message(
     checker_offline: bool,
     checker_pool: Optional[List[str]] = None,
 ) -> str:
-    """Tin nhắn mở đầu: ai làm gì, brain nào, quyền gì."""
+    """Welcome gọn: 2 dòng vai trò, không dùng bảng 4 cột để không tràn khung chat hẹp."""
     same_model = maker_model == checker_model
-    if maker_offline:
-        note = ""
-    elif same_model:
-        note = (
-            "\n\n> ⚠️ Hai agent đang dùng **chung model** nên có cùng điểm mù. Set "
-            "`DRA_AUDITOR_MODEL` hoặc `DRA_MODEL_POOL` trong `.env` để bật cross-model."
-        )
-    else:
-        note = (
-            "\n\n> 🔀 **Cross-model checking đang bật**: Checker soi bằng model khác Maker "
-            "nên lỗi của model này khó lọt qua model kia."
-        )
+    lines = [
+        "**Data Reliability Squad** · sẵn sàng",
+        "",
+        f"- **Maker** (Agent 1) · {brain_badge(maker_model, maker_offline)} — điều tra & vá, chỉ ghi sau khi anh duyệt",
+        f"- **Checker** (Agent 2) · {brain_badge(checker_model, checker_offline)} — chỉ đọc, nghiệm thu độc lập",
+    ]
+    if not maker_offline:
+        lines += [
+            "",
+            "> Cross-model: **tắt** (cùng model, cùng điểm mù)"
+            if same_model
+            else "> Cross-model: **bật** — Checker dùng model khác Maker",
+        ]
         if checker_pool and len(checker_pool) > 1:
-            note += f" Pool luân chuyển: `{'`, `'.join(checker_pool)}`."
+            lines.append(f"> Pool luân chuyển: `{'`, `'.join(checker_pool)}`")
+    lines += ["", "Đang nhận incident từ hàng đợi alert…"]
+    return "\n".join(lines)
 
-    return (
-        "## 🛡️ Data Reliability Squad — Maker · Checker\n\n"
-        "| Vai | Agent | Brain | Quyền trên DuckDB |\n"
-        "| --- | --- | --- | --- |\n"
-        f"| 👷‍♀️ **Maker** | Agent 1 — Data SRE Agent | {brain_badge(maker_model, maker_offline)} | "
-        "đọc + **ghi** (chỉ sau khi anh duyệt) |\n"
-        f"| 🕵️‍♀️ **Checker** | Agent 2 — Data Auditor | {brain_badge(checker_model, checker_offline)} | "
-        "**chỉ đọc**, nghiệm thu độc lập |\n\n"
-        f"- 🗄️ Warehouse: `{config.DUCKDB_PATH}` (DuckDB, vừa là Source vừa là Sink)\n"
-        f"- 📖 Runbook khả dụng: `{'`, `'.join(tools.list_runbook_topics())}`"
-        f"{note}\n\n"
-        "📥 Đang nhận incident từ hàng đợi alert…"
-    )
 
+from web.frontend.components import render_notification_bar, render_raw_data_boxes
 
 __all__ = [
     "AUTHOR_SRE",
@@ -319,7 +310,11 @@ __all__ = [
     "publish_actions",
     "triage_actions",
     "audit_actions",
+    "recheck_decision_actions",
     "warehouse_snapshot",
     "brain_badge",
     "welcome_message",
+    "render_raw_data_boxes",
+    "render_notification_bar",
 ]
+

@@ -129,9 +129,11 @@ lineage thật. Bạn chỉ lo cách ly dữ liệu bẩn — một việc, làm
       một phiên bản SDK?) chứ không phải rải rác.
    c. Xem sample vài dòng lỗi thật để mô tả cụ thể.
    d. Kiểm tra bảng hạ nguồn (mart_*) đã bị nhiễm dữ liệu bẩn chưa.
-   e. Kiểm tra `dq_test_results` xem còn test nào khác fail cùng lúc.
+   e. Kiểm tra `dq_test_results` xem còn test nào khác fail cùng lúc trên bảng/nguồn này.
+      Trong `evidence_summary`, BẮT BUỘC liệt kê đầy đủ toàn bộ các loại lỗi (ví dụ: số dòng NULL customer_id, số dòng trùng order_id, số dòng âm tiền,...) và tổng số dòng vi phạm toàn diện trên bảng/nguồn, để engineer có cái nhìn đầy đủ 100% về sự cố.
 3. **DIAGNOSE** — Tổng hợp bằng chứng thành root cause. CẤM phỏng đoán số liệu:
    mọi con số bạn viết ra phải xuất phát từ kết quả query. Nếu chưa query thì phải query.
+   Trình bày rõ ràng số dòng vi phạm của test chính và các test liên đới.
 4. **IMPACT** — Đọc `lineage_fact_orders` để biết bảng/dashboard hạ nguồn, đọc
    `sla_policy` để chấm severity và xác định có SLA breach hay không.
 5. **RECOMMEND** — Đọc `dq_playbook` rồi soạn `shadow_execution_script` theo đúng 4 câu ở

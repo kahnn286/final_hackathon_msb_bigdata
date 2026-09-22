@@ -1,0 +1,113 @@
+/* copilot.css — Custom stylesheet cho Chainlit khi chạy trong dock */
+
+:root {
+  --maker-color: #5CC8FF;
+  --checker-color: #A78BFA;
+}
+
+/* Font and base reset */
+body, [class*="MuiTypography-root"], .step-container {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif !important;
+}
+
+/* Modern sleek custom scrollbar for Chainlit */
+* {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;
+}
+
+::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-radius: 9999px !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35) !important;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Hide header / readme button inside iframe */
+header, .watermark, #readme-button, [data-testid="readme-button"] {
+  display: none !important;
+}
+
+/* Tables inside messages: scroll horizontally, clean border */
+.message-content table, [class*="MuiTable-root"] {
+  display: block !important;
+  width: 100% !important;
+  overflow-x: auto !important;
+  border-collapse: collapse !important;
+  font-size: 12px !important;
+  margin: 8px 0 !important;
+}
+
+.message-content table th {
+  background-color: #161D27 !important;
+  color: #9AA7B8 !important;
+  padding: 6px 10px !important;
+  border: 1px solid #232D3A !important;
+  font-weight: 600 !important;
+}
+
+.message-content table td {
+  padding: 6px 10px !important;
+  border: 1px solid #232D3A !important;
+  color: #E6EBF2 !important;
+}
+
+/* Left borders for distinct agent message roles */
+[data-author="Data SRE Agent"] .message-content,
+[data-author="Data SRE Agent"] > div {
+  border-left: 3px solid var(--maker-color) !important;
+  background-color: rgba(92, 200, 255, 0.04) !important;
+  border-radius: 8px !important;
+}
+
+[data-author="Data Auditor"] .message-content,
+[data-author="Data Auditor"] > div {
+  border-left: 3px solid var(--checker-color) !important;
+  background-color: rgba(167, 139, 250, 0.04) !important;
+  border-radius: 8px !important;
+}
+
+[data-author="dbt alert"] .message-content {
+  border-left: 3px solid #F87171 !important;
+  background-color: rgba(248, 113, 113, 0.04) !important;
+  border-radius: 8px !important;
+}
+
+/* Composer & Send button */
+[class*="chat-input"], [class*="MuiInputBase-root"] {
+  background-color: #11171F !important;
+  border-color: #232D3A !important;
+}
+
+button[type="submit"], [aria-label="Send message"], [class*="submit-button"] {
+  background-color: #5CC8FF !important;
+  color: #0B0F14 !important;
+}
+
+/* Action buttons */
+button:has(span:contains("Duyệt")), [aria-label*="Duyệt"] {
+  background-color: #5CC8FF !important;
+  color: #0B0F14 !important;
+  font-weight: 700 !important;
+}

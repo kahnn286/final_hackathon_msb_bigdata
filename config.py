@@ -111,6 +111,34 @@ PORT: int = _env_int("PORT", _env_int("DRA_PORT", 8000))
 #: Token bảo vệ REST API /api/*. Để trống = KHÔNG xác thực (chỉ nên dùng khi demo local).
 API_TOKEN: str = os.getenv("DRA_API_TOKEN", "").strip()
 
+# ---------------------------------------------------------------------------
+# 5. Scope WEB — notification (Email & Zalo Bot)
+# ---------------------------------------------------------------------------
+
+#: SMTP Email config
+SMTP_HOST: str = os.getenv("DRA_SMTP_HOST", "").strip()
+SMTP_PORT: int = _env_int("DRA_SMTP_PORT", 587)
+SMTP_USER: str = os.getenv("DRA_SMTP_USER", "").strip()
+SMTP_PASSWORD: str = os.getenv("DRA_SMTP_PASSWORD", "").strip()
+SMTP_USE_TLS: bool = os.getenv("DRA_SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
+SMTP_FROM: str = os.getenv("DRA_SMTP_FROM", "alerts@datareliability.local").strip()
+NOTIFICATION_EMAIL: str = os.getenv("DRA_NOTIFICATION_EMAIL", "operator@company.com").strip()
+
+#: Zalo Bot config (hỗ trợ Webhook hoặc Zalo OA)
+ZALO_WEBHOOK_URL: str = os.getenv("DRA_ZALO_WEBHOOK_URL", "").strip()
+ZALO_OA_TOKEN: str = os.getenv("DRA_ZALO_OA_TOKEN", "").strip()
+ZALO_USER_ID: str = os.getenv("DRA_ZALO_USER_ID", "").strip()
+
+#: Telegram Bot config (hỗ trợ gửi vào Group hoặc Chat cá nhân)
+TELEGRAM_BOT_TOKEN: str = os.getenv("DRA_TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID: str = os.getenv("DRA_TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_USER_ID: str = os.getenv("DRA_TELEGRAM_USER_ID", "").strip()
+
+#: URL công khai của Web UI để chèn vào link trong thông báo
+PUBLIC_UI_URL: str = os.getenv(
+    "DRA_PUBLIC_URL", f"http://localhost:{PORT}{CHAINLIT_PATH}"
+).strip()
+
 
 __all__ = [
     "PROJECT_ROOT",
@@ -127,4 +155,19 @@ __all__ = [
     "HOST",
     "PORT",
     "API_TOKEN",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "SMTP_USE_TLS",
+    "SMTP_FROM",
+    "NOTIFICATION_EMAIL",
+    "ZALO_WEBHOOK_URL",
+    "ZALO_OA_TOKEN",
+    "ZALO_USER_ID",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TELEGRAM_USER_ID",
+    "PUBLIC_UI_URL",
 ]
+

@@ -1589,7 +1589,12 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 def tool_analyze_data_quality_violations(
-    table_name: str, test_sql: str = "", test_name: str = "", max_patterns: int = 10
+    table_name: str,
+    test_sql: str = "",
+    test_name: str = "",
+    max_patterns: int = 10,
+    violation_description: str = "",
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Universal data quality violation analyzer - tự động phân tích mọi loại vi phạm
@@ -1606,8 +1611,11 @@ def tool_analyze_data_quality_violations(
         "analysis": {
             "schema_info": {},
             "violation_patterns": [],
-            "remediation_strategy": {}
-        }
+            "remediation_strategy": {},
+            "violation_count": 0,
+        },
+        "investigation_queries": [],
+        "violation_patterns": [],
     }
     
     try:
@@ -1616,10 +1624,12 @@ def tool_analyze_data_quality_violations(
         if not schema_result:
             return {"ok": False, "error": f"Cannot access schema for table {table}"}
         
+        nullable_cols = [col["column_name"] for col in schema_result if col.get("null") == "YES"]
+        all_col_names = [col["column_name"] for col in schema_result]
         result["analysis"]["schema_info"] = {
             "total_columns": len(schema_result),
             "columns": schema_result,
-            "nullable_columns": [col["column_name"] for col in schema_result if col.get("null") == "YES"],
+            "nullable_columns": nullable_cols,
             "numeric_columns": [col["column_name"] for col in schema_result 
                               if any(t in col.get("column_type", "").upper() 
                                    for t in ["INT", "DECIMAL", "FLOAT", "DOUBLE", "NUMERIC"])],
@@ -1628,19 +1638,48 @@ def tool_analyze_data_quality_violations(
                                 for t in ["VARCHAR", "TEXT", "CHAR", "STRING"])]
         }
         
-        # 2. Auto-detect violations if test_sql provided
+        # 2. Derive test_sql if not provided
+        if not test_sql:
+            if test_name:
+                from data.dq import load_checks, FALLBACK_CHECKS
+                checks = load_checks() or FALLBACK_CHECKS
+                for c in checks:
+                    if c.test_name == test_name or (c.model == table and c.test_name in test_name):
+                        test_sql = c.count_sql
+                        break
+            if not test_sql and "customer_id" in nullable_cols:
+                test_sql = f"SELECT COUNT(*) AS violations FROM {table} WHERE customer_id IS NULL"
+
+        # 3. Auto-detect violations
         if test_sql:
             violation_result = tool_sample_violations(table, test_sql, limit=20)
             if violation_result.get("ok"):
-                result["analysis"]["violation_count"] = violation_result["actual_violations_count"]
-                result["analysis"]["sample_violations"] = violation_result["sample_records"]
+                v_count = violation_result.get("actual_violations_count", 0)
+                samples = violation_result.get("sample_records", [])
+                result["analysis"]["violation_count"] = v_count
+                result["analysis"]["sample_violations"] = samples
                 
-                # Generate remediation strategy based on analysis
+                # Generate patterns & remediation strategy
+                patterns = _analyze_universal_violation_patterns(samples, result["analysis"]["schema_info"])
+                result["violation_patterns"] = patterns
+                result["analysis"]["violation_patterns"] = patterns
+
                 strategy = _generate_universal_remediation_strategy(
                     table, result["analysis"]["schema_info"], 
-                    violation_result["sample_records"], test_name
+                    samples, test_name or "not_null_customer_id"
                 )
                 result["analysis"]["remediation_strategy"] = strategy
+
+        # 4. Generate investigation queries for Agent
+        queries = [
+            f"SELECT COUNT(*) AS total_rows FROM {table}",
+        ]
+        if "customer_id" in all_col_names:
+            queries.extend([
+                f"SELECT source_system, COUNT(*) AS total_rows, SUM(CASE WHEN customer_id IS NULL THEN 1 ELSE 0 END) AS null_cust_count FROM {table} GROUP BY source_system",
+                f"SELECT * FROM {table} WHERE customer_id IS NULL LIMIT 5"
+            ])
+        result["investigation_queries"] = queries
         
     except Exception as exc:
         data_audit.log_tool_call(
@@ -1829,8 +1868,11 @@ def _generate_strategy_from_pattern(table: str, pattern: Dict[str, Any], schema_
 
 def tool_generate_dynamic_remediation_sql(
     table_name: str,
-    violation_analysis: Dict[str, Any],
-    target_shadow_table: str = ""
+    violation_analysis: Optional[Dict[str, Any]] = None,
+    target_shadow_table: str = "",
+    violation_patterns: Optional[List[Any]] = None,
+    test_name: str = "",
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Tự động sinh SQL remediation hoàn chỉnh cho WAP architecture
@@ -1843,11 +1885,16 @@ def tool_generate_dynamic_remediation_sql(
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     
-    analysis = violation_analysis.get("analysis", {})
+    violation_analysis = violation_analysis or {}
+    analysis = violation_analysis.get("analysis", {}) if isinstance(violation_analysis, dict) else {}
     strategy = analysis.get("remediation_strategy", {})
     
     if not strategy:
-        return {"ok": False, "error": "No remediation strategy provided"}
+        schema_info = tool_get_table_schema(table)
+        nullable_cols = [c["column_name"] for c in schema_info if c.get("null") == "YES"] if schema_info else ["customer_id"]
+        strategy = _generate_strategy_from_test_name(
+            table, test_name or "not_null_customer_id", {"columns": schema_info or [], "nullable_columns": nullable_cols}
+        )
     
     # Generate WAP-compliant script
     wap_script_parts = [
@@ -2081,8 +2128,8 @@ TOOL_FUNCTIONS.update({
 
 # Update allowed arguments registry
 _ALLOWED_ARGS.update({
-    "tool_analyze_data_quality_violations": {"table_name", "test_sql", "test_name", "max_patterns"},
-    "tool_generate_dynamic_remediation_sql": {"table_name", "violation_analysis", "target_shadow_table"},
+    "tool_analyze_data_quality_violations": {"table_name", "test_sql", "test_name", "max_patterns", "violation_description"},
+    "tool_generate_dynamic_remediation_sql": {"table_name", "violation_analysis", "target_shadow_table", "violation_description", "approach"},
     "tool_self_correct_sql": {"sql_script", "table_name", "error_message", "max_attempts"},
 })
 

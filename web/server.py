@@ -27,6 +27,8 @@ from fastapi.staticfiles import StaticFiles
 import config
 from web.backend.api import router, scheduler_loop, startup
 from web.backend.security import warn_if_open
+from web.backend.ui_api import ui_router
+from web.frontend.dashboard import STATIC_DIR as DASHBOARD_STATIC_DIR, get_dashboard_response
 
 STATIC_DIR = Path(__file__).resolve().parent / "frontend" / "static"
 
@@ -51,6 +53,15 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(ui_router)
+
+    # --- Mount static dashboard (DataOps Console) -------------------------
+    if DASHBOARD_STATIC_DIR.is_dir():
+        app.mount(
+            "/static/dashboard",
+            StaticFiles(directory=str(DASHBOARD_STATIC_DIR)),
+            name="dashboard-static",
+        )
 
     # --- dbt docs (Lineage Graph DAG) -------------------------------------
     # dbt sinh `target/index.html` là một SPA tự nạp manifest.json + catalog.json nằm
@@ -75,28 +86,24 @@ def create_app() -> FastAPI:
         """Trang Airflow-style Pipeline Orchestrator & DAG Inspector."""
         return FileResponse(STATIC_DIR / "pipeline.html")
 
-    # --- Dashboard tĩnh ---------------------------------------------------
+    # --- Dashboard tĩnh & DataOps Console ---------------------------------
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-        @app.get("/", include_in_schema=False)
-        async def dashboard_page() -> FileResponse:
-            return FileResponse(STATIC_DIR / "index.html")
+    @app.get("/", response_class=FileResponse, include_in_schema=False)
+    @app.get("/dashboard", response_class=FileResponse, include_in_schema=False)
+    async def dashboard_root() -> FileResponse:
+        """DataOps Console phục vụ static index.html."""
+        return get_dashboard_response()
 
-        # Cho phép nạp ./styles.css và ./app.js theo đường dẫn tương đối từ "/"
-        @app.get("/styles.css", include_in_schema=False)
-        async def styles() -> FileResponse:
-            return FileResponse(STATIC_DIR / "styles.css", media_type="text/css")
+    # Cho phép nạp ./styles.css và ./app.js theo đường dẫn tương đối từ "/"
+    @app.get("/styles.css", include_in_schema=False)
+    async def styles() -> FileResponse:
+        return FileResponse(STATIC_DIR / "styles.css", media_type="text/css")
 
-        @app.get("/app.js", include_in_schema=False)
-        async def script() -> FileResponse:
-            return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")
-
-    else:  # pragma: no cover - chỉ xảy ra nếu thiếu thư mục static
-
-        @app.get("/", include_in_schema=False)
-        async def fallback() -> RedirectResponse:
-            return RedirectResponse(url=config.CHAINLIT_PATH)
+    @app.get("/app.js", include_in_schema=False)
+    async def script() -> FileResponse:
+        return FileResponse(STATIC_DIR / "app.js", media_type="application/javascript")
 
     @app.on_event("startup")
     async def _on_startup() -> None:

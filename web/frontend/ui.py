@@ -48,6 +48,8 @@ from data import audit as data_audit
 from data import incident_store
 from data.incidents import build_sample_incident_payload
 from data.warehouse import ensure_database
+from web import state as ui_state
+from web.notifications import NotificationHub
 from web.frontend.rendering import (
     AUTHOR_ALERT,
     AUTHOR_AUDITOR,
@@ -58,6 +60,8 @@ from web.frontend.rendering import (
     audit_actions,
     publish_actions,
     recheck_decision_actions,
+    render_notification_bar,
+    render_raw_data_boxes,
     render_tool_step,
     triage_actions,
     warehouse_snapshot,
@@ -202,11 +206,13 @@ async def run_independent_audit(trigger: str = "auto") -> Optional[AuditReport]:
     thinking = cl.Message(author=AUTHOR_AUDITOR, content=intro)
     await thinking.send()
 
+    ui_state.set_state(status="AUDITING", checker="working")
     try:
         audit: AuditReport = await run_agent_with_live_steps(
             auditor, lambda: auditor.audit(incident=incident, remediation_report=report)
         )
     except Exception as exc:  # noqa: BLE001
+        ui_state.set_state(status="FAILED", checker="idle")
         await cl.Message(
             author=AUTHOR_AUDITOR, content=f"😢 Em nghiệm thu bị lỗi giữa đường ạ: `{exc}`"
         ).send()
@@ -215,6 +221,11 @@ async def run_independent_audit(trigger: str = "auto") -> Optional[AuditReport]:
     await send_audit_report(audit)
 
     ok = audit.verdict == "AUDIT_PASSED"
+    ui_state.set_state(
+        status="RESOLVED" if ok else "AUDIT_FAILED",
+        checker="idle",
+        audit_verdict=audit.verdict,
+    )
     mismatch = any(c.verified_by_engine is False for c in audit.checks)
     tail = [
         f"### {'🎖️' if ok else '🛑'} Maker–Checker: "
@@ -316,6 +327,27 @@ async def on_chat_start() -> None:
     payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident)
     incident = IncidentInput(**payload)
 
+    # --- Bắn thông báo đa kênh qua NotificationHub (Web, Email, Zalo Bot) ---
+    severity_val = str(getattr(incident, "severity", None) or "HIGH")
+    evidence = getattr(incident, "evidence_payload", {}) or {}
+    source_sys = str(evidence.get("source_system", "mobile_app_v3") if isinstance(evidence, dict) else "mobile_app_v3")
+    await run_in_threadpool(
+        NotificationHub.notify_incident,
+        incident_id=incident.incident_id,
+        incident_type=str(incident.incident_type),
+        target_table=incident.target_table,
+        source_system=source_sys,
+        severity=severity_val,
+        description=incident.description,
+    )
+
+    notif_bar = render_notification_bar(
+        incident_id=incident.incident_id,
+        target_table=incident.target_table,
+        source_system=source_sys,
+        severity=severity_val,
+    )
+
     await cl.Message(
         author=AUTHOR_ALERT,
         content=(
@@ -324,7 +356,8 @@ async def on_chat_start() -> None:
             f"- **Bảng:** `{incident.target_table}`\n"
             f"- **Nguồn alert:** `{incident.source}`\n"
             f"- **Nạp từ:** {source_note}\n\n"
-            f"{incident.description}"
+            f"{incident.description}\n\n"
+            f"{notif_bar}"
         ),
         elements=[
             cl.Text(
@@ -337,6 +370,12 @@ async def on_chat_start() -> None:
     ).send()
 
     agent.load_incident(incident)
+    ui_state.set_state(
+        incident_id=incident.incident_id,
+        status="INVESTIGATING",
+        maker="working",
+        audit_verdict=None,
+    )
     cl.user_session.set("agent", agent)
     cl.user_session.set("incident", incident)
     cl.user_session.set("auditor", None)
@@ -352,6 +391,7 @@ async def on_chat_start() -> None:
         agent = cached
         agent.on_tool_event = None
         cl.user_session.set("agent", agent)
+        ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
         await cl.Message(
             author=AUTHOR_SRE,
             content=(
@@ -369,6 +409,7 @@ async def on_chat_start() -> None:
         agent.report = preloaded_report
         agent.status = preloaded_report.status
         cl.user_session.set("agent", agent)
+        ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
         await cl.Message(
             author=AUTHOR_SRE,
             content=(
@@ -387,6 +428,7 @@ async def on_chat_start() -> None:
     try:
         report: AgentReport = await run_agent_with_live_steps(agent, agent.investigate)
     except Exception as exc:  # noqa: BLE001
+        ui_state.set_state(status="FAILED", maker="idle", checker="idle")
         thinking.content = (
             f"❌ Em gặp lỗi khi điều tra ạ: `{exc}`\n\n"
             "Anh kiểm tra lại `DRA_API_KEY` / `DRA_BASE_URL` / `DRA_MODEL` giúp em nhé "
@@ -394,6 +436,8 @@ async def on_chat_start() -> None:
         )
         await thinking.update()
         return
+
+    ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
 
     thinking.content = (
         f"✅ Em điều tra xong rồi ạ — **{len(agent.tool_events)} lần gọi tool** "
@@ -556,11 +600,13 @@ async def on_approve(action: cl.Action) -> None:
     )
     await thinking.send()
 
+    ui_state.set_state(status="EXECUTING", maker="working")
     try:
         result: Dict[str, Any] = await run_agent_with_live_steps(
             agent, lambda: agent.approve_shadow(narrate=False)
         )
     except Exception as exc:  # noqa: BLE001
+        ui_state.set_state(status="FAILED", maker="idle")
         thinking.content = f"❌ Chạy trên staging thất bại ạ: `{exc}`"
         await thinking.update()
         return
@@ -771,6 +817,7 @@ async def on_publish_prod(action: cl.Action) -> None:
     incident_store.set_status(
         report.incident_id, "PUBLISHED_RESOLVED", ready_for_production=True
     )
+    ui_state.set_state(status="RESOLVED", maker="idle", checker="idle")
 
     snapshot = await run_in_threadpool(warehouse_snapshot, plan.target_production_table)
     if snapshot:
@@ -900,6 +947,7 @@ async def on_reject(action: cl.Action) -> None:
         tools.lock_remediation(report.incident_id)
     agent.status = IncidentStatus.REJECTED
     cl.user_session.set("awaiting_reject_reason", True)
+    ui_state.set_state(status="REJECTED", maker="idle")
 
     await cl.Message(
         author=AUTHOR_ENGINEER,

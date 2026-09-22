@@ -1,0 +1,191 @@
+{
+  "generated_at": "2026-09-20T16:00:00+07:00",
+  "system": {
+    "service": "Data Reliability Squad",
+    "version": "2.0",
+    "warehouse": { "online": true, "path": "data/warehouse.duckdb", "fact_orders_rows": 1000 },
+    "notifications": { "email": "dry_run", "zalo": "dry_run" },
+    "models": {
+      "maker": { "model": "Llama-3.3-70B-Instruct", "offline": false },
+      "checker": { "model": "Qwen-2.5-72B-Instruct", "offline": false },
+      "cross_model_enabled": true
+    },
+    "remediation_unlocked": false
+  },
+  "kpis": {
+    "total_rows": 1000,
+    "violating_rows": 15,
+    "quarantined_rows": 0,
+    "quarantine_expected": 15,
+    "tests_total": 6,
+    "tests_passed": 5
+  },
+  "sources": [
+    {
+      "key": "erp_core",
+      "name": "ERP Core System",
+      "version": "v2.1.0",
+      "rows": 400,
+      "violations": 0,
+      "last_ingested_at": "2026-09-20T15:58:00+07:00",
+      "status": "healthy"
+    },
+    {
+      "key": "web_checkout",
+      "name": "Web Checkout Stream",
+      "version": "v1.8.4",
+      "rows": 300,
+      "violations": 0,
+      "last_ingested_at": "2026-09-20T15:59:00+07:00",
+      "status": "healthy"
+    },
+    {
+      "key": "mobile_app_v3",
+      "name": "Mobile App Ingest",
+      "version": "v3.4.1",
+      "rows": 200,
+      "violations": 15,
+      "last_ingested_at": "2026-09-20T15:55:00+07:00",
+      "status": "incident"
+    }
+  ],
+  "tables": [
+    {
+      "name": "fact_orders",
+      "layer": "fact",
+      "rows": 1000,
+      "dq": "fail",
+      "failed_tests": 1,
+      "updated_at": "2026-09-20T15:59:00+07:00",
+      "recommendation": "Cách ly 15 dòng lỗi từ SDK 3.4.1"
+    },
+    {
+      "name": "dim_customers",
+      "layer": "dim",
+      "rows": 400,
+      "dq": "pass",
+      "failed_tests": 0,
+      "updated_at": "2026-09-20T15:00:00+07:00",
+      "recommendation": "Phục vụ bình thường"
+    },
+    {
+      "name": "quarantine_fact_orders",
+      "layer": "quarantine",
+      "rows": 0,
+      "dq": "pending",
+      "updated_at": null,
+      "recommendation": "Lưu vết cách ly khi có sự cố"
+    },
+    {
+      "name": "mart_daily_revenue",
+      "layer": "mart",
+      "rows": null,
+      "dq": "stale",
+      "updated_at": null,
+      "recommendation": "Cần rebuild sau khi vá dữ liệu fact"
+    }
+  ],
+  "dq_tests": [
+    {
+      "test_name": "not_null_fact_orders_customer_id",
+      "column": "customer_id",
+      "type": "not_null",
+      "failures": 15,
+      "status": "fail",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    },
+    {
+      "test_name": "accepted_values_fact_orders_order_status",
+      "column": "order_status",
+      "type": "accepted_values",
+      "failures": 0,
+      "status": "pass",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    },
+    {
+      "test_name": "positive_total_amount_fact_orders",
+      "column": "total_amount",
+      "type": "expression",
+      "failures": 0,
+      "status": "pass",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    },
+    {
+      "test_name": "valid_email_fact_orders_customer_email",
+      "column": "customer_email",
+      "type": "expression",
+      "failures": 0,
+      "status": "pass",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    },
+    {
+      "test_name": "unique_fact_orders_order_id",
+      "column": "order_id",
+      "type": "unique",
+      "failures": 0,
+      "status": "pass",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    },
+    {
+      "test_name": "not_null_fact_orders_order_date",
+      "column": "order_date",
+      "type": "not_null",
+      "failures": 0,
+      "status": "pass",
+      "last_run_at": "2026-09-20T15:55:00+07:00"
+    }
+  ],
+  "lineage": {
+    "nodes": [
+      { "id": "sources", "label": "3 Nguồn Upstream", "rows": 1000, "state": "normal" },
+      { "id": "fact_orders", "label": "fact_orders", "rows": 1000, "state": "incident" },
+      { "id": "dq_checks", "label": "DQ Tests (5/6 pass)", "rows": 6, "state": "warn" },
+      { "id": "quarantine", "label": "quarantine_fact_orders", "rows": 0, "state": "pending" },
+      { "id": "mart_daily_revenue", "label": "mart_daily_revenue", "rows": null, "state": "affected" },
+      { "id": "mart_customer_ltv", "label": "mart_customer_ltv", "rows": null, "state": "affected" }
+    ],
+    "edges": [
+      { "from": "sources", "to": "fact_orders", "state": "normal" },
+      { "from": "fact_orders", "to": "dq_checks", "state": "incident" },
+      { "from": "dq_checks", "to": "quarantine", "state": "pending" },
+      { "from": "fact_orders", "to": "mart_daily_revenue", "state": "affected" },
+      { "from": "fact_orders", "to": "mart_customer_ltv", "state": "affected" }
+    ]
+  },
+  "incident": {
+    "id": "INC-2026-DQ01",
+    "status": "WAITING_FOR_APPROVAL",
+    "severity": "HIGH",
+    "type": "DATA_QUALITY",
+    "title": "15 dòng customer_id NULL trong fact_orders",
+    "target_table": "fact_orders",
+    "source": "mobile_app_v3",
+    "detected_at": "2026-09-20T15:55:00+07:00",
+    "blast_radius": ["mart_daily_revenue", "mart_customer_ltv"],
+    "audit_verdict": null,
+    "agents": { "maker": "idle", "checker": "idle" }
+  },
+  "activity": [
+    {
+      "ts": "2026-09-20T15:55:02+07:00",
+      "actor": "maker",
+      "tool": "tool_query_duckdb",
+      "kind": "read",
+      "summary": "SELECT count(*) FROM fact_orders WHERE customer_id IS NULL"
+    },
+    {
+      "ts": "2026-09-20T15:55:05+07:00",
+      "actor": "maker",
+      "tool": "tool_read_runbook",
+      "kind": "read",
+      "summary": "Đã đọc runbook dq_playbook.md"
+    },
+    {
+      "ts": "2026-09-20T15:55:08+07:00",
+      "actor": "maker",
+      "tool": "tool_query_duckdb",
+      "kind": "read",
+      "summary": "GROUP BY source_system, source_version -> phát hiện 100% tại SDK 3.4.1"
+    }
+  ]
+}
