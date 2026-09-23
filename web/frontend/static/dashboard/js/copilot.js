@@ -17,7 +17,7 @@ export function initCopilotDock() {
 
   function loadIframeIfNeeded() {
     if (!isIframeLoaded && iframe) {
-      iframe.src = '/chat';
+      iframe.src = '/chat/';
       isIframeLoaded = true;
     }
   }
@@ -42,7 +42,7 @@ export function initCopilotDock() {
         console.warn('Failed to select incident for source:', err);
       }
       if (iframe) {
-        iframe.src = `/chat?src=${encodeURIComponent(contextName)}&t=${Date.now()}`;
+        iframe.src = `/chat/?src=${encodeURIComponent(contextName)}&t=${Date.now()}`;
         isIframeLoaded = true;
       }
     } else {
@@ -118,9 +118,26 @@ export function initCopilotDock() {
     }
   });
 
+  // Source Tabs handling
+  const sourceTabs = document.querySelectorAll('.dock-source-tab');
+  sourceTabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const sourceKey = tab.getAttribute('data-source');
+      sourceTabs.forEach((t) => {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
+      tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
+      if (sourceKey) {
+        openDock(sourceKey);
+      }
+    });
+  });
+
   // Default state according to screen width
   if (window.innerWidth >= 1440) {
-    openDock();
+    openDock('web_checkout');
   } else {
     closeDock();
   }
@@ -128,10 +145,38 @@ export function initCopilotDock() {
   window.openCopilotWithContext = openDock;
 }
 
+export function setActiveSourceTab(sourceKey) {
+  const sourceTabs = document.querySelectorAll('.dock-source-tab');
+  sourceTabs.forEach((tab) => {
+    const isTarget = tab.getAttribute('data-source') === sourceKey;
+    tab.classList.toggle('active', isTarget);
+    tab.setAttribute('aria-selected', isTarget ? 'true' : 'false');
+  });
+}
+
+export function renderSourceTabs(sources = []) {
+  if (!Array.isArray(sources)) return;
+  sources.forEach((s) => {
+    const key = s.key || s.source_system;
+    if (!key) return;
+    const badge = document.getElementById(`tabBadge-${key}`);
+    if (badge) {
+      const viols = s.total_viols || s.violations || 0;
+      badge.textContent = viols;
+      if (viols > 0) {
+        badge.className = 'dock-source-badge badge-warning';
+      } else {
+        badge.className = 'dock-source-badge badge-neutral';
+      }
+    }
+  });
+}
+
 export function setContextChip(name, incId = null) {
   const chip = document.getElementById('dockContextChip');
   if (chip) {
-    const idLabel = incId ? ` · ${incId}` : '';
-    chip.textContent = `Ngữ cảnh: ${name}${idLabel}`;
+    const idLabel = incId ? ` · <span style="font-family:'JetBrains Mono',monospace;color:var(--text,#f8fafc);font-weight:600;">${incId}</span>` : '';
+    chip.innerHTML = `📍 Ngữ cảnh: <strong style="color:#a5b4fc;font-weight:700;">${name}</strong>${idLabel}`;
   }
+  setActiveSourceTab(name);
 }

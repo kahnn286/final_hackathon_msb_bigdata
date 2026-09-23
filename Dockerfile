@@ -21,8 +21,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Source code theo 3 scope + config/entrypoint
+# Source code theo 3 scope + config/entrypoint + chainlit/public
 COPY config.py main.py ./
+COPY .chainlit/ ./.chainlit/
+COPY public/ ./public/
 COPY data/ ./data/
 COPY ai/ ./ai/
 COPY web/ ./web/
@@ -47,5 +49,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,os,sys; \
 sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8000')+'/health', timeout=4).status==200 else sys.exit(1)"
 
-# REST API (/health, /api/*) + Chainlit UI (/chat) tren cung 1 port
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# REST API (/health, /api/*) + Chainlit UI (/chat) tren cung 1 port (ho tro HTTPS reverse proxy)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

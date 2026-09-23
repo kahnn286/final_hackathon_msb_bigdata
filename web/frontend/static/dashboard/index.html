@@ -73,6 +73,13 @@
           </div>
         </div>
 
+        <select class="scan-interval-select" id="selectScanInterval" title="Chu kỳ tự động quét lại dữ liệu">
+          <option value="2000">⚡ Quét 2s</option>
+          <option value="4000" selected>⏱️ Quét 4s</option>
+          <option value="10000">🐢 Quét 10s</option>
+          <option value="0">⏸️ Tắt tự quét</option>
+        </select>
+
         <button class="btn-icon" id="btnRefresh" aria-label="Làm mới dữ liệu">
           <svg class="icon"><use href="/static/dashboard/icons.svg#icon-refresh-cw"></use></svg>
         </button>
@@ -266,8 +273,23 @@
           </div>
         </div>
 
+        <div class="dock-source-tabs" id="dockSourceTabs" role="tablist" aria-label="Nguồn dữ liệu">
+          <button class="dock-source-tab active" data-source="web_checkout" role="tab" aria-selected="true">
+            <span class="dock-source-name">🌐 web_checkout</span>
+            <span class="dock-source-badge badge-warning" id="tabBadge-web_checkout">30</span>
+          </button>
+          <button class="dock-source-tab" data-source="mobile_app_v3" role="tab" aria-selected="false">
+            <span class="dock-source-name">📱 mobile_app_v3</span>
+            <span class="dock-source-badge badge-neutral" id="tabBadge-mobile_app_v3">0</span>
+          </button>
+          <button class="dock-source-tab" data-source="erp_core" role="tab" aria-selected="false">
+            <span class="dock-source-name">🏢 erp_core</span>
+            <span class="dock-source-badge badge-neutral" id="tabBadge-erp_core">0</span>
+          </button>
+        </div>
+
         <div class="dock-context-bar" id="dockContextChip">
-          Ngữ cảnh: mobile_app_v3 · INC-2026-DQ01
+          Ngữ cảnh: web_checkout · INC-20260922-100627
         </div>
 
         <div class="dock-iframe-wrap">

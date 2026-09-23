@@ -131,20 +131,20 @@ ALLOWED_TRANSITIONS: Dict[str, frozenset] = {
         # hoặc huỷ. Không có đường nào đi thẳng sang PUBLISHED.
         {"WAITING_SHADOW_APPROVAL", "STAGING_VERIFYING", "CANCELLED", "FAILED"}
     ),
-    # --- luồng cũ, giữ để tương thích ---
+    # --- luồng tương thích WAP & standard ---
     "WAITING_FOR_APPROVAL": frozenset(
-        {"EXECUTING", "RESOLVED", "FAILED", "REJECTED", "CANCELLED",
-         "WAITING_SHADOW_APPROVAL"}
+        {"STAGING_VERIFYING", "READY_FOR_PRODUCTION", "AUDIT_FAILED_TRIAGE",
+         "WAITING_SHADOW_APPROVAL", "EXECUTING", "RESOLVED", "FAILED", "REJECTED", "CANCELLED"}
     ),
-    "EXECUTING": frozenset({"RESOLVED", "FAILED"}),
-    "REJECTED": frozenset({"INVESTIGATING", "WAITING_SHADOW_APPROVAL", "CANCELLED"}),
+    "EXECUTING": frozenset({"STAGING_VERIFYING", "READY_FOR_PRODUCTION", "RESOLVED", "FAILED"}),
+    "REJECTED": frozenset({"INVESTIGATING", "WAITING_SHADOW_APPROVAL", "WAITING_FOR_APPROVAL", "CANCELLED"}),
     "FAILED": frozenset(
-        {"INVESTIGATING", "WAITING_SHADOW_APPROVAL", "AUDIT_FAILED_TRIAGE", "CANCELLED"}
+        {"INVESTIGATING", "WAITING_SHADOW_APPROVAL", "WAITING_FOR_APPROVAL", "AUDIT_FAILED_TRIAGE", "CANCELLED"}
     ),
     # Trạng thái kết thúc: không đi đâu nữa
-    "PUBLISHED_RESOLVED": frozenset(),
+    "PUBLISHED_RESOLVED": frozenset({"RESOLVED"}),
     "CANCELLED": frozenset(),
-    "RESOLVED": frozenset(),
+    "RESOLVED": frozenset({"INVESTIGATING", "WAITING_SHADOW_APPROVAL"}),
 }
 
 

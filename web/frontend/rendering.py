@@ -295,6 +295,117 @@ def welcome_message(
     return "\n".join(lines)
 
 
+def render_multi_source_matrix(sources_data: List[Dict[str, Any]]) -> str:
+    """Render ma trận sức khoẻ của cả 3 nguồn dữ liệu."""
+    lines = [
+        "| Nguồn dữ liệu (Source) | Tổng số dòng | Dòng vi phạm | Trạng thái |",
+        "| :--- | :---: | :---: | :---: |",
+    ]
+    for s in sources_data:
+        name = s.get("name", s.get("key"))
+        key = s.get("key")
+        total = s.get("total_rows", 0)
+        viols = s.get("total_viols", 0)
+        if viols == 0:
+            status_badge = "🟢 SẠCH (Healthy)"
+        else:
+            status_badge = f"🔴 CÓ LỖI ({viols} vi phạm)"
+        lines.append(f"| `{key}` ({name}) | {total:,} | **{viols}** | {status_badge} |")
+    return "\n".join(lines)
+
+
+def multi_source_actions(sources_data: List[Dict[str, Any]]) -> List[cl.Action]:
+    """Các nút chuyển nhanh sang điều tra nguồn khác khi có sự cố."""
+    actions: List[cl.Action] = []
+    for s in sources_data:
+        key = s.get("key")
+        viols = s.get("total_viols", 0)
+        if viols > 0:
+            actions.append(
+                cl.Action(
+                    name="investigate_source",
+                    value=str(key),
+                    payload={"source": key},
+                    label=f"🚨 Xử lý nguồn {key} ({viols} lỗi)",
+                    tooltip=f"Chuyển phiên làm việc của AI sang nguồn dữ liệu {key}",
+                )
+            )
+    return actions
+
+
+def render_healthy_landing_card(
+    source_key: str,
+    sources_data: List[Dict[str, Any]],
+    maker_model: str,
+    checker_model: str,
+    total_rows: int = 1000,
+) -> str:
+    """Render thẻ chào mừng khi hệ thống/nguồn đang sạch 100%."""
+    active_src = next((s for s in sources_data if s.get("key") == source_key), None)
+    src_label = active_src.get("name", source_key) if active_src else source_key
+    src_rows = active_src.get("total_rows", total_rows) if active_src else total_rows
+
+    return (
+        f"### 🛡️ Data Reliability Squad · Túc trực Sẵn sàng\n\n"
+        f"- 👷‍♀️ **Maker (Agent 1):** `{maker_model}` — túc trực điều tra & vá lỗi.\n"
+        f"- 🕵️‍♀️ **Checker (Agent 2):** `{checker_model}` — túc trực nghiệm thu độc lập.\n\n"
+        f"---\n\n"
+        f"### 🟢 Nguồn `{source_key}` ({src_label}): **100% SẠCH**\n"
+        f"- **Tổng số dòng:** {src_rows:,} dòng\n"
+        f"- **Số vi phạm DQ:** **0 dòng** (Không có sự cố nào cần xử lý)\n"
+        f"- **Trạng thái:** Hoàn toàn ổn định\n\n"
+        "💡 _Anh có thể chọn các thao tác nhanh bên dưới hoặc đặt câu hỏi tự do cho Agent:_"
+    )
+
+
+def healthy_action_chips(source_key: str = "all") -> List[cl.Action]:
+    """Các gợi ý hành động nhanh khi dữ liệu đang sạch."""
+    return [
+        cl.Action(
+            name="action_scan_dq",
+            value=source_key,
+            payload={"action": "scan_dq", "source": source_key},
+            label="🔍 Chạy Quét DQ Test",
+            tooltip="Chạy toàn bộ các bài test Data Quality để kiểm chứng lại",
+        ),
+        cl.Action(
+            name="action_data_profile",
+            value=source_key,
+            payload={"action": "data_profile", "source": source_key},
+            label="📊 Soi Phân Bố Dữ Liệu",
+            tooltip="Xem thống kê phân bố và chất lượng dữ liệu của nguồn này",
+        ),
+        cl.Action(
+            name="action_inject_defect",
+            value=source_key,
+            payload={"action": "inject_defect", "source": source_key},
+            label="🧪 Thử Nghiệm Giả Lập Lỗi",
+            tooltip="Tạo sự cố mẫu để kiểm thử quy trình Maker–Checker",
+        ),
+    ]
+
+
+def render_compact_incident_alert(
+    incident_id: str,
+    incident_type: str,
+    target_table: str,
+    source_sys: str,
+    severity: str,
+    description: str,
+    source_note: str,
+) -> str:
+    """Render 1 thẻ Alert duy nhất, ngắn gọn, súc tích."""
+    sev_icon = "🔴" if severity == "HIGH" else "🟠"
+    return (
+        f"### 🚨 Sự Cố Dữ Liệu: `{incident_id}`\n"
+        f"| Nguồn phát sinh | Bảng ảnh hưởng | Mức độ | Loại sự cố |\n"
+        f"| :--- | :--- | :---: | :---: |\n"
+        f"| `{source_sys}` | `{target_table}` | {sev_icon} **{severity}** | `{incident_type}` |\n\n"
+        f"**Mô tả:** {description}\n\n"
+        f"_(Nạp từ: {source_note} · Đã thông báo qua Email/Zalo)_"
+    )
+
+
 from web.frontend.components import render_notification_bar, render_raw_data_boxes
 
 __all__ = [
@@ -316,5 +427,10 @@ __all__ = [
     "welcome_message",
     "render_raw_data_boxes",
     "render_notification_bar",
+    "render_multi_source_matrix",
+    "multi_source_actions",
+    "render_healthy_landing_card",
+    "healthy_action_chips",
+    "render_compact_incident_alert",
 ]
 

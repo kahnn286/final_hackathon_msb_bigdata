@@ -4,6 +4,7 @@
 
 import { esc, formatNumber, formatRelativeTime, formatTime } from './format.js';
 import { renderLineageSvg } from './lineage.js';
+import { renderSourceTabs } from './copilot.js';
 
 export function render(state) {
   if (!state) return;
@@ -13,6 +14,7 @@ export function render(state) {
   renderHero(state);
   renderKpis(state.kpis);
   renderSources(state.sources);
+  renderSourceTabs(state.sources);
   renderSquadAndGuardrails(state.system);
   renderLineage(state.lineage);
   renderTables(state.tables);
@@ -21,12 +23,10 @@ export function render(state) {
   renderActivity(state.activity);
 
   const chip = document.getElementById('dockContextChip');
-  if (chip) {
+  if (chip && !chip.innerHTML.includes('📍 Ngữ cảnh:')) {
     if (state.incident) {
-      const srcName = state.incident.source || 'erp_core';
-      chip.textContent = `Ngữ cảnh: ${srcName} · ${state.incident.id || 'INC-2026-DQ01'}`;
-    } else {
-      chip.textContent = 'Ngữ cảnh: Kho Dữ Liệu Sạch (0 sự cố)';
+      const srcName = state.incident.source || 'web_checkout';
+      chip.innerHTML = `📍 Ngữ cảnh: <strong style="color:#a5b4fc;font-weight:700;">${srcName}</strong> · <span style="font-family:'JetBrains Mono',monospace;color:var(--text,#f8fafc);font-weight:600;">${state.incident.id || 'INC-2026-DQ01'}</span>`;
     }
   }
 }

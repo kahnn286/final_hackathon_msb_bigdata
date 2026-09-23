@@ -237,8 +237,25 @@ def reset_clean_warehouse() -> Dict[str, Any]:
     try:
         for ddl in DDL_STATEMENTS:
             con.execute(ddl)
+        from data.incident_store import INCIDENT_DDL
+        for ddl in INCIDENT_DDL:
+            try:
+                con.execute(ddl)
+            except Exception:
+                pass
+        from data.wap import _DDL as WAP_DDL
+        for ddl in WAP_DDL:
+            try:
+                con.execute(ddl)
+            except Exception:
+                pass
+
         con.execute("DROP TABLE IF EXISTS quarantine_fact_orders")
         con.execute("DROP TABLE IF EXISTS shadow_fact_orders")
+        try:
+            con.execute("UPDATE incidents SET status = 'RESOLVED', updated_at = CURRENT_TIMESTAMP WHERE status IN ('DETECTED', 'INVESTIGATING', 'WAITING_FOR_APPROVAL', 'WAITING_SHADOW_APPROVAL')")
+        except Exception:
+            pass
         con.executemany("INSERT INTO dim_customers VALUES (?, ?, ?, ?, ?)", customers)
         con.executemany(
             "INSERT INTO fact_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -251,7 +268,7 @@ def reset_clean_warehouse() -> Dict[str, Any]:
         con.close()
 
     # Khởi tạo lại connection & chạy lại DQ checks
-    get_connection(path)
+    get_connection()
     dq_results = run_all_checks()
 
     # Reset UI State về IDLE sạch

@@ -58,8 +58,14 @@ from web.frontend.rendering import (
     AUTHOR_SYSTEM,
     approval_actions,
     audit_actions,
+    healthy_action_chips,
+    markdown_table,
+    multi_source_actions,
     publish_actions,
     recheck_decision_actions,
+    render_compact_incident_alert,
+    render_healthy_landing_card,
+    render_multi_source_matrix,
     render_notification_bar,
     render_raw_data_boxes,
     render_tool_step,
@@ -258,18 +264,131 @@ async def run_independent_audit(trigger: str = "auto") -> Optional[AuditReport]:
 
 
 # ---------------------------------------------------------------------------
-# 4. CHAINLIT HANDLERS
+# 4. CHAINLIT HANDLERS & MULTI-SOURCE MONITORING
 # ---------------------------------------------------------------------------
 
 
-def _resolve_incident() -> tuple[Dict[str, Any], Optional[AgentReport], str]:
+def scan_all_sources_status() -> List[Dict[str, Any]]:
+    """Quét đo đếm toàn diện số dòng và vi phạm của 3 nguồn dữ liệu trên fact_orders."""
+    src_meta = [
+        {"key": "web_checkout", "name": "Web Checkout Stream", "version": "v1.8.4"},
+        {"key": "mobile_app_v3", "name": "Mobile App Ingest", "version": "v3.4.1"},
+        {"key": "erp_core", "name": "ERP Core System", "version": "v2.1.0"},
+    ]
+    sources_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        from data import connection as db_conn
+        res = db_conn.fetch(
+            """
+            SELECT 
+                source_system,
+                COUNT(*) AS total_rows,
+                SUM(
+                    CASE 
+                        WHEN customer_id IS NULL THEN 1 
+                        WHEN customer_email IS NULL THEN 1
+                        WHEN total_amount <= 0 THEN 1 
+                        WHEN order_status NOT IN ('COMPLETED', 'PENDING', 'CANCELLED', 'REFUNDED') THEN 1
+                        ELSE 0 
+                    END
+                ) AS total_viols,
+                MAX(ingested_at) AS last_ingested_at
+            FROM fact_orders
+            GROUP BY source_system
+            """
+        )
+        rows = res.get("rows", [])
+        sources_map = {str(r.get("source_system")): r for r in rows if r.get("source_system")}
+
+        dup_res = db_conn.fetch(
+            "SELECT source_system, COUNT(*) - COUNT(DISTINCT order_id) AS dup_cnt FROM fact_orders GROUP BY source_system"
+        )
+        for d in dup_res.get("rows", []):
+            sk = str(d.get("source_system"))
+            dc = int(d.get("dup_cnt") or 0)
+            if sk in sources_map and dc > 0:
+                sources_map[sk]["total_viols"] = int(sources_map[sk].get("total_viols") or 0) + dc
+    except Exception:
+        sources_map = {}
+
+    sources_data: List[Dict[str, Any]] = []
+    for s in src_meta:
+        m = sources_map.get(s["key"], {})
+        s_rows = int(m.get("total_rows", 0) or 0)
+        s_viols = int(m.get("total_viols", 0) or 0)
+        sources_data.append({
+            "key": s["key"],
+            "name": s["name"],
+            "version": s["version"],
+            "total_rows": s_rows,
+            "total_viols": s_viols,
+            "status": "incident" if s_viols > 0 else "healthy",
+        })
+    return sources_data
+
+
+def _resolve_incident_for_source(source_key: str) -> tuple[Optional[Dict[str, Any]], Optional[AgentReport], str]:
+    """Tìm hoặc tạo incident envelope nhắm vào nguồn dữ liệu cụ thể (chỉ khi có lỗi thật)."""
+    sources_data = scan_all_sources_status()
+    src_info = next((s for s in sources_data if s.get("key") == source_key), None)
+    if not src_info or src_info.get("total_viols", 0) == 0:
+        return None, None, "clean"
+
+    all_open = incident_store.list_incidents(status="WAITING_FOR_APPROVAL", limit=10) + \
+               incident_store.list_incidents(status="DETECTED", limit=10)
+    for inc in all_open:
+        row = incident_store.get_incident(str(inc.get("incident_id", "")))
+        if row and row.get("envelope"):
+            env = row["envelope"]
+            hint_src = str((env.get("evidence_payload") or {}).get("upstream_hint", {}).get("source_system", ""))
+            if source_key in hint_src or source_key in str(env.get("description", "")):
+                report = None
+                if row.get("report"):
+                    try:
+                        report = AgentReport.model_validate(row["report"])
+                    except Exception:
+                        report = None
+                return env, report, f"sự cố `{row['incident_id']}` nguồn `{source_key}`"
+
+    try:
+        from data.incidents import build_incident_payload
+        env = build_incident_payload()
+        if "evidence_payload" in env and isinstance(env["evidence_payload"], dict):
+            env["evidence_payload"]["upstream_hint"] = {
+                "source_system": source_key,
+                "source_version": "v3.4.1" if "mobile" in source_key else "v1.8.4",
+            }
+        return env, None, f"phát hiện {src_info.get('total_viols', 0)} dòng lỗi trên nguồn `{source_key}`"
+    except Exception:
+        return None, None, "clean"
+
+
+def _resolve_incident(target_source: Optional[str] = None) -> tuple[Optional[Dict[str, Any]], Optional[AgentReport], str]:
     """
     Chọn incident cho phiên chat này (chạy trong threadpool vì có truy vấn DuckDB).
-
-    Trả về (envelope, báo cáo đã điều tra nếu có, ghi chú nguồn). Nếu worker nền đã điều
-    tra xong thì **dùng lại báo cáo đó** — không điều tra lại, tiết kiệm token và cho
-    engineer thấy đúng báo cáo mà họ vừa xem trên dashboard.
+    Chỉ trả về incident khi THỰC SỰ có vi phạm DQ trên DuckDB.
     """
+    # 1. Kiểm tra tình trạng thực tế của DuckDB
+    sources_data = scan_all_sources_status()
+    total_viols = sum(s.get("total_viols", 0) for s in sources_data)
+    if total_viols == 0:
+        # Kho dữ liệu hoàn toàn sạch 100% -> tuyệt đối không nạp incident cũ
+        incident_store.clear_selection()
+        try:
+            con = tools.get_connection()
+            con.execute("UPDATE incidents SET status = 'RESOLVED', updated_at = CURRENT_TIMESTAMP WHERE status IN ('DETECTED', 'INVESTIGATING', 'WAITING_FOR_APPROVAL', 'WAITING_SHADOW_APPROVAL')")
+        except Exception:
+            pass
+        return None, None, "clean"
+
+    # Nếu có chỉ định target_source cụ thể (từ tab đang chọn)
+    if target_source:
+        src_info = next((s for s in sources_data if s.get("key") == target_source), None)
+        if src_info and src_info.get("total_viols", 0) == 0:
+            return None, None, "clean"
+        return _resolve_incident_for_source(target_source)
+
+    # 2. Nếu thực sự có vi phạm, kiểm tra incident được chọn hoặc mở
     incident_id = incident_store.selected_incident_id()
     row = incident_store.get_incident(incident_id) if incident_id else None
 
@@ -282,87 +401,121 @@ def _resolve_incident() -> tuple[Dict[str, Any], Optional[AgentReport], str]:
             if detected:
                 row = incident_store.get_incident(str(detected[0]["incident_id"]))
 
-    if row is None or not row.get("envelope"):
-        return build_sample_incident_payload(), None, "incident mẫu (không có sự cố nào đang mở)"
+    if row is not None and row.get("envelope"):
+        incident_store.clear_selection()
+        report: Optional[AgentReport] = None
+        if row.get("report"):
+            try:
+                report = AgentReport.model_validate(row["report"])
+            except Exception:
+                report = None
+        note = (
+            f"sự cố `{row['incident_id']}` từ job `{row['job_id']}`"
+            + (" · dùng lại báo cáo worker nền đã điều tra" if report else " · chưa có báo cáo")
+        )
+        return row["envelope"], report, note
 
-    incident_store.clear_selection()
-    report: Optional[AgentReport] = None
-    if row.get("report"):
-        try:
-            report = AgentReport.model_validate(row["report"])
-        except Exception:  # noqa: BLE001 - báo cáo cũ lỗi thì điều tra lại
-            report = None
-    note = (
-        f"sự cố `{row['incident_id']}` từ job `{row['job_id']}`"
-        + (" · dùng lại báo cáo worker nền đã điều tra" if report else " · chưa có báo cáo")
-    )
-    return row["envelope"], report, note
+    # Nếu không có incident record lưu sẵn, lấy nguồn có nhiều vi phạm nhất để tạo envelope
+    dirty = [s for s in sources_data if s.get("total_viols", 0) > 0]
+    dirtiest = sorted(dirty, key=lambda s: s.get("total_viols", 0), reverse=True)[0]
+    return _resolve_incident_for_source(dirtiest["key"])
 
 
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """
-    Khởi động phiên trực: nạp incident đang cần xử lý (từ dashboard hoặc hàng đợi),
-    trình báo cáo + nút duyệt.
+    Khởi động phiên trực:
+    - Nếu hệ thống sạch: Hiện Landing Card trực chiến theo đúng NGUỒN ĐANG CHỌN, KHÔNG chạy vá giả.
+    - Nếu có sự cố: Hiện 1 thẻ Alert duy nhất và bắt đầu điều tra.
     """
     await run_in_threadpool(ensure_database, config.DUCKDB_PATH)
+
+    # 1. Xác định tab nguồn đang chọn (từ referer URL query param `src`, hoặc state)
+    active_source = "web_checkout"
+    try:
+        session = getattr(cl.context, "session", None)
+        headers = getattr(session, "headers", {}) or {}
+        referer = headers.get("referer", "") or getattr(session, "http_referer", "") or ""
+        if "src=" in referer:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(referer).query)
+            if "src" in qs and qs["src"]:
+                active_source = qs["src"][0]
+        else:
+            st = ui_state.get_state()
+            if st.get("selected_source"):
+                active_source = st["selected_source"]
+    except Exception:
+        pass
 
     agent = DataReliabilityAgent()
     checker_settings = LLMSettings.for_auditor(avoid_model=agent.settings.model)
 
-    await cl.Message(
-        author=AUTHOR_SYSTEM,
-        content=welcome_message(
+    sources_data = await run_in_threadpool(scan_all_sources_status)
+    payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident, active_source)
+
+    # --- TRƯỜNG HỢP 1: DỮ LIỆU SẠCH (HEALTHY MODE) ---
+    if payload is None or source_note == "clean":
+        ui_state.set_state(status="RESOLVED", maker="idle", checker="idle")
+        cl.user_session.set("agent", agent)
+        cl.user_session.set("incident", None)
+        cl.user_session.set("report", None)
+        cl.user_session.set("auditor", None)
+        cl.user_session.set("audit_report", None)
+        cl.user_session.set("published", False)
+        cl.user_session.set("ready_for_production", False)
+
+        welcome_text = render_healthy_landing_card(
+            source_key=active_source,
+            sources_data=sources_data,
             maker_model=agent.settings.model,
-            maker_offline=agent.is_offline,
             checker_model=checker_settings.model,
-            checker_offline=not checker_settings.api_key,
-            checker_pool=checker_settings.model_pool,
-        ),
-    ).send()
+        )
+        await cl.Message(
+            author=AUTHOR_SYSTEM,
+            content=welcome_text,
+            actions=healthy_action_chips(active_source),
+        ).send()
+        return
 
-    # --- Nạp incident cần xử lý ------------------------------------------
-    # Ưu tiên incident mà engineer vừa bấm "Mở phiên xử lý" trên dashboard, sau đó tới
-    # incident đang chờ duyệt cũ nhất, cuối cùng mới fallback về incident mẫu.
-    payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident)
+    # --- TRƯỜNG HỢP 2: CÓ SỰ CỐ THẬT (INCIDENT MODE) ---
     incident = IncidentInput(**payload)
-
-    # --- Bắn thông báo đa kênh qua NotificationHub (Web, Email, Zalo Bot) ---
-    severity_val = str(getattr(incident, "severity", None) or "HIGH")
     evidence = getattr(incident, "evidence_payload", {}) or {}
-    source_sys = str(evidence.get("source_system", "mobile_app_v3") if isinstance(evidence, dict) else "mobile_app_v3")
-    await run_in_threadpool(
-        NotificationHub.notify_incident,
+    source_sys = str(evidence.get("source_system", "web_checkout") if isinstance(evidence, dict) else "web_checkout")
+    await _start_investigation_flow(incident, source_sys, preloaded_report=preloaded_report, source_note=source_note)
+
+
+async def _start_investigation_flow(
+    incident: IncidentInput,
+    source_sys: str,
+    preloaded_report: Optional[AgentReport] = None,
+    source_note: str = "",
+) -> None:
+    """Bắt đầu luồng điều tra sự cố thực tế với Agent 1 và hiển thị thẻ sự cố."""
+    agent: Optional[DataReliabilityAgent] = cl.user_session.get("agent")
+    if agent is None:
+        agent = DataReliabilityAgent()
+        cl.user_session.set("agent", agent)
+
+    severity_val = str(getattr(incident, "severity", None) or "HIGH")
+    alert_card = render_compact_incident_alert(
         incident_id=incident.incident_id,
         incident_type=str(incident.incident_type),
         target_table=incident.target_table,
-        source_system=source_sys,
+        source_sys=source_sys,
         severity=severity_val,
         description=incident.description,
+        source_note=source_note,
     )
 
-    notif_bar = render_notification_bar(
-        incident_id=incident.incident_id,
-        target_table=incident.target_table,
-        source_system=source_sys,
-        severity=severity_val,
-    )
-
+    payload_dict = incident.model_dump()
     await cl.Message(
         author=AUTHOR_ALERT,
-        content=(
-            f"### 🚨 Incident mới: `{incident.incident_id}`\n"
-            f"- **Loại:** `{incident.incident_type}`\n"
-            f"- **Bảng:** `{incident.target_table}`\n"
-            f"- **Nguồn alert:** `{incident.source}`\n"
-            f"- **Nạp từ:** {source_note}\n\n"
-            f"{incident.description}\n\n"
-            f"{notif_bar}"
-        ),
+        content=alert_card,
         elements=[
             cl.Text(
                 name="incident_payload.json",
-                content=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                content=json.dumps(payload_dict, ensure_ascii=False, indent=2, default=str),
                 display="side",
                 language="json",
             )
@@ -385,43 +538,17 @@ async def on_chat_start() -> None:
     cl.user_session.set("audit_skipped", False)
     cl.user_session.set("resolved", False)
 
-    # --- Nếu worker nền đã điều tra rồi thì DÙNG LẠI, không điều tra lần hai -----
-    cached = worker.get_agent(incident.incident_id)
-    if cached is not None and cached.report is not None:
-        agent = cached
-        agent.on_tool_event = None
-        cl.user_session.set("agent", agent)
-        ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
-        await cl.Message(
-            author=AUTHOR_SRE,
-            content=(
-                "✅ Em đã điều tra ca này ở luồng nền rồi ạ, em không chạy lại để khỏi tốn "
-                f"token 💰\n\n- **{len(agent.tool_events)} lần gọi tool** "
-                f"({len(agent.executed_queries())} câu SQL trên DuckDB)\n"
-                f"- Chi phí: {agent.usage.describe()}"
-            ),
-        ).send()
-        await send_agent_report(agent.report, agent)
-        return
-
     if preloaded_report is not None:
-        # Có báo cáo trong DB nhưng agent gốc không còn trong process (server restart)
         agent.report = preloaded_report
         agent.status = preloaded_report.status
         cl.user_session.set("agent", agent)
         ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
-        await cl.Message(
-            author=AUTHOR_SRE,
-            content=(
-                "✅ Em lấy lại báo cáo đã điều tra từ kho sự cố ạ (worker nền làm trước đó). "
-                "Anh xem và quyết định duyệt hay không nhé 🙆‍♀️"
-            ),
-        ).send()
         await send_agent_report(preloaded_report, agent)
         return
 
     thinking = cl.Message(
-        author=AUTHOR_SRE, content="🔍 Em nhận ca rồi ạ, em đang điều tra trên DuckDB đây anh…"
+        author=AUTHOR_SRE,
+        content=f"🔍 Em nhận ca sự cố `{incident.incident_id}` nguồn `{source_sys}` rồi ạ! Đang điều tra trên DuckDB…",
     )
     await thinking.send()
 
@@ -429,20 +556,15 @@ async def on_chat_start() -> None:
         report: AgentReport = await run_agent_with_live_steps(agent, agent.investigate)
     except Exception as exc:  # noqa: BLE001
         ui_state.set_state(status="FAILED", maker="idle", checker="idle")
-        thinking.content = (
-            f"❌ Em gặp lỗi khi điều tra ạ: `{exc}`\n\n"
-            "Anh kiểm tra lại `DRA_API_KEY` / `DRA_BASE_URL` / `DRA_MODEL` giúp em nhé "
-            "(hoặc chạy `python -m ai.check_llm` để soi nhanh)."
-        )
+        thinking.content = f"❌ Em gặp lỗi khi điều tra: `{exc}`"
         await thinking.update()
         return
 
     ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
-
     thinking.content = (
         f"✅ Em điều tra xong rồi ạ — **{len(agent.tool_events)} lần gọi tool** "
         f"({len(agent.executed_queries())} câu SQL trên DuckDB) 📊\n\n"
-        f"💰 Chi phí: {agent.usage.describe()} · {agent.settings.describe_budget()}"
+        f"💰 Chi phí: {agent.usage.describe()}"
     )
     await thinking.update()
     await send_agent_report(report, agent)
@@ -613,12 +735,15 @@ async def on_approve(action: cl.Action) -> None:
 
     execution = result.get("execution", {}) or {}
     staged = bool(result.get("ok"))
-    incident_store.set_status(
-        report.incident_id,
-        "STAGING_VERIFYING" if staged else "AUDIT_FAILED_TRIAGE",
-        shadow_table=result.get("shadow_table") or plan.shadow_table_name,
-        error=None if staged else str(result.get("error"))[:900],
-    )
+    try:
+        incident_store.set_status(
+            report.incident_id,
+            "STAGING_VERIFYING" if staged else "AUDIT_FAILED_TRIAGE",
+            shadow_table=result.get("shadow_table") or plan.shadow_table_name,
+            error=None if staged else str(result.get("error"))[:900],
+        )
+    except Exception as exc:
+        print(f"[on_approve] ⚠️  Warning set_status STAGING_VERIFYING: {exc}")
 
     if not staged:
         error_detail = str(result.get("error"))[:300]
@@ -675,36 +800,97 @@ async def on_approve(action: cl.Action) -> None:
     # ---- Agent 2 nghiệm thu NGAY trên bảng bóng --------------------------
     # Ở kiến trúc WAP, nghiệm thu không còn là lựa chọn tuỳ ý: nó là **cổng** mở nút
     # Publish. Bỏ qua nghiệm thu thì không có đường nào lên production cả.
+    shadow_tbl = str(execution.get("shadow_table") or plan.shadow_table_name or "")
+    maker_model = agent.settings.model if agent else "?"
+    auditor: Optional[DataAuditorAgent] = cl.user_session.get("auditor")
+    if auditor is None:
+        auditor = DataAuditorAgent(settings=LLMSettings.for_auditor(avoid_model=maker_model))
+        cl.user_session.set("auditor", auditor)
+
     auditor_msg = cl.Message(
         author=AUTHOR_AUDITOR,
-        content=f"🕵️‍♀️ Em soi bảng bóng `{execution.get('shadow_table')}` đây ạ…",
+        content=f"🕵️‍♀️ Em là **Data Auditor** (Agent 2) — em đang soi bảng bóng `{shadow_tbl}` trên DuckDB…",
     )
     await auditor_msg.send()
 
-    audit_payload = await run_in_threadpool(
-        run_audit_headless, agent.incident, report, execution.get("shadow_table") or ""
-    )
-    ready = bool(audit_payload.get("is_ready_for_production"))
-    audit_report = audit_payload.get("audit_report") or {}
+    audit: Optional[AuditReport] = None
+    try:
+        audit = await asyncio.wait_for(
+            run_agent_with_live_steps(
+                auditor,
+                lambda: auditor.audit(
+                    incident=agent.incident,
+                    remediation_report=report,
+                    shadow_table=shadow_tbl,
+                ),
+            ),
+            timeout=20.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Fallback nếu LLM của Agent 2 lỗi / timeout -> dùng trực tiếp engine checks (Python thuần)
+        try:
+            auditor.load_case(agent.incident, report, shadow_table=shadow_tbl)
+            engine_checks = auditor.run_engine_checks()
+            is_passed = all(c.passed for c in engine_checks if c.severity == "BLOCKING")
+            err_label = "Timeout 20s" if isinstance(exc, asyncio.TimeoutError) else str(exc)[:80]
+            audit = AuditReport(
+                audit_id=auditor.audit_id,
+                audited_incident_id=report.incident_id,
+                target_table=report.target_table,
+                quarantine_table=auditor.quarantine_table or "",
+                verdict="AUDIT_PASSED" if is_passed else "AUDIT_FAILED",
+                checks=engine_checks,
+                certification_summary=(
+                    f"⚡ Agent 2 ({err_label}) — hệ thống tự động nghiệm thu siêu tốc "
+                    "bằng Engine Checks (Python thuần trực tiếp trên DuckDB) ạ."
+                ),
+                recommended_action="PUBLISH" if is_passed else "INVESTIGATE",
+                auditor_notes=f"Nghiệm thu trực tiếp qua DuckDB engine: {err_label}",
+                shadow_table=shadow_tbl,
+                auditor_model="fast-duckdb-engine",
+            )
+            audit = AuditReport.model_validate(audit.model_dump())
+            auditor.report = audit
+        except Exception as fallback_exc:  # noqa: BLE001
+            await cl.Message(
+                author=AUTHOR_AUDITOR,
+                content=f"❌ Nghiệm thu thất bại: `{fallback_exc}`",
+            ).send()
+            return
 
-    incident_store.set_status(
-        report.incident_id,
-        "READY_FOR_PRODUCTION" if ready else "AUDIT_FAILED_TRIAGE",
-        audit_json=json.dumps(audit_report, ensure_ascii=False, default=str),
-        ready_for_production=ready,
-        error="" if ready else str(
-            (audit_payload.get("failed_details") or {}).get("error_message") or ""
-        )[:900],
-    )
+    if audit is None:
+        await cl.Message(
+            author=AUTHOR_AUDITOR,
+            content="❌ Không nhận được báo cáo nghiệm thu từ Agent 2.",
+        ).send()
+        return
 
+    cl.user_session.set("audit_report", audit)
+    ready = bool(audit.is_ready_for_production)
+    audit_report = json.loads(audit.to_json())
+
+    try:
+        incident_store.set_status(
+            report.incident_id,
+            "READY_FOR_PRODUCTION" if ready else "AUDIT_FAILED_TRIAGE",
+            audit_json=json.dumps(audit_report, ensure_ascii=False, default=str),
+            ready_for_production=ready,
+            error="" if ready else str(
+                (audit.failed_details or {}).get("error_message") or ""
+            )[:900],
+        )
+    except Exception as exc:
+        print(f"[on_approve] ⚠️  Warning set_status READY_FOR_PRODUCTION: {exc}")
+
+    passed_count = sum(1 for c in audit.checks if c.passed)
+    total_checks = len(audit.checks)
     auditor_msg.content = (
-        f"{'🎖️' if ready else '🛑'} **{audit_report.get('verdict', 'AUDIT_FAILED')}** — "
-        f"{sum(1 for c in audit_report.get('checks', []) if c.get('passed'))}"
-        f"/{len(audit_report.get('checks', []))} hạng mục đạt trên bảng bóng."
+        f"{'🎖️' if ready else '🛑'} **{audit.verdict}** — "
+        f"{passed_count}/{total_checks} hạng mục đạt trên bảng bóng."
     )
     await auditor_msg.update()
 
-    diff = audit_payload.get("shadow_diff") or {}
+    diff = auditor.shadow_diff or {}
     await cl.Message(
         author=AUTHOR_AUDITOR,
         content=(
@@ -720,7 +906,19 @@ async def on_approve(action: cl.Action) -> None:
         elements=[
             cl.Text(
                 name="audit_on_shadow.json",
-                content=json.dumps(audit_payload, ensure_ascii=False, indent=2, default=str),
+                content=json.dumps(
+                    {
+                        "mode": auditor.mode,
+                        "audit_report": audit_report,
+                        "shadow_table": auditor.shadow_table,
+                        "shadow_diff": auditor.shadow_diff,
+                        "is_ready_for_production": audit.is_ready_for_production,
+                        "failed_details": audit.failed_details,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
                 display="side",
                 language="json",
             )
@@ -838,6 +1036,117 @@ async def on_publish_prod(action: cl.Action) -> None:
             "biên dịch theo lineage thật thì không bị sai tên cột ạ 💚"
         ),
     ).send()
+
+    # ---- TỰ ĐỘNG QUÉT LẠI TOÀN BỘ 3 NGUỒN (Post-Publish Multi-Source Re-scan) ----
+    sources_data = await run_in_threadpool(scan_all_sources_status)
+    matrix_md = render_multi_source_matrix(sources_data)
+    await cl.Message(
+        author=AUTHOR_SYSTEM,
+        content=(
+            "### 📡 Báo Cáo Quét Lại Toàn Bộ 3 Nguồn Dữ Liệu (Post-Publish Multi-Source Re-scan)\n\n"
+            f"{matrix_md}"
+        ),
+    ).send()
+
+    dirty_sources = [s for s in sources_data if s.get("total_viols", 0) > 0]
+    if not dirty_sources:
+        await cl.Message(
+            author=AUTHOR_SRE,
+            content=(
+                "🎉 **HỆ THỐNG HOÀN TOÀN ỔN ĐỊNH**: Tất cả các nguồn dữ liệu "
+                "(`web_checkout`, `mobile_app_v3`, `erp_core`) đều đã **SẠCH 100% (Zero DQ Violations)**! "
+                "Mart hạ nguồn sẵn sàng để dbt rebuild."
+            ),
+        ).send()
+    else:
+        dirty_labels = [f"`{s['key']}` ({s['total_viols']} vi phạm)" for s in dirty_sources]
+        await cl.Message(
+            author=AUTHOR_ALERT,
+            content=(
+                f"⚠️ **Phát hiện sự cố còn tồn tại trên nguồn:** {', '.join(dirty_labels)}.\n\n"
+                "Anh bấm nút bên dưới để em chuyển sang khoanh vùng và xử lý ngay nguồn tiếp theo nhé 👇"
+            ),
+            actions=multi_source_actions(sources_data),
+        ).send()
+
+
+@cl.action_callback("investigate_source")
+@cl.action_callback("switch_source")
+async def on_investigate_source(action: cl.Action) -> None:
+    """Chuyển phiên làm việc của AI sang điều tra nguồn dữ liệu được chọn."""
+    await action.remove()
+    source_key = str(action.payload.get("source") or action.value or "mobile_app_v3")
+
+    await cl.Message(
+        author=AUTHOR_ENGINEER,
+        content=f"🔍 **Yêu cầu Agent 1 chuyển sang điều tra nguồn dữ liệu:** `{source_key}`.",
+    ).send()
+
+    # Nạp incident của source này
+    payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident_for_source, source_key)
+    incident = IncidentInput(**payload)
+
+    severity_val = str(getattr(incident, "severity", None) or "HIGH")
+    evidence = getattr(incident, "evidence_payload", {}) or {}
+    source_sys = str(evidence.get("source_system", source_key) if isinstance(evidence, dict) else source_key)
+
+    notif_bar = render_notification_bar(
+        incident_id=incident.incident_id,
+        target_table=incident.target_table,
+        source_system=source_sys,
+        severity=severity_val,
+    )
+
+    await cl.Message(
+        author=AUTHOR_ALERT,
+        content=(
+            f"### 🚨 Chuyển sang Sự Cố: `{incident.incident_id}` (Nguồn `{source_key}`)\n"
+            f"- **Loại:** `{incident.incident_type}`\n"
+            f"- **Bảng:** `{incident.target_table}`\n"
+            f"- **Nguồn alert:** `{incident.source}`\n"
+            f"- **Nạp từ:** {source_note}\n\n"
+            f"{incident.description}\n\n"
+            f"{notif_bar}"
+        ),
+    ).send()
+
+    agent = DataReliabilityAgent()
+    agent.load_incident(incident)
+    ui_state.set_state(
+        incident_id=incident.incident_id,
+        status="INVESTIGATING",
+        maker="working",
+        audit_verdict=None,
+    )
+    cl.user_session.set("agent", agent)
+    cl.user_session.set("incident", incident)
+    cl.user_session.set("auditor", None)
+    cl.user_session.set("audit_report", None)
+    cl.user_session.set("published", False)
+    cl.user_session.set("ready_for_production", False)
+
+    thinking = cl.Message(
+        author=AUTHOR_SRE,
+        content=f"🔍 Em nhận lệnh chuyển sang nguồn `{source_key}` rồi ạ! Đang điều tra trên DuckDB…",
+    )
+    await thinking.send()
+
+    try:
+        report: AgentReport = await run_agent_with_live_steps(agent, agent.investigate)
+    except Exception as exc:  # noqa: BLE001
+        ui_state.set_state(status="FAILED", maker="idle", checker="idle")
+        thinking.content = f"❌ Em gặp lỗi khi điều tra nguồn `{source_key}` ạ: `{exc}`"
+        await thinking.update()
+        return
+
+    ui_state.set_state(status="WAITING_FOR_APPROVAL", maker="idle")
+    thinking.content = (
+        f"✅ Em điều tra xong nguồn `{source_key}` rồi ạ — **{len(agent.tool_events)} lần gọi tool** "
+        f"({len(agent.executed_queries())} câu SQL trên DuckDB) 📊\n\n"
+        f"💰 Chi phí: {agent.usage.describe()}"
+    )
+    await thinking.update()
+    await send_agent_report(report, agent)
 
 
 @cl.action_callback("cancel_shadow")
@@ -1051,3 +1360,160 @@ async def on_skip_audit(action: cl.Action) -> None:
         ),
         actions=audit_actions(),
     ).send()
+
+
+@cl.action_callback("action_scan_dq")
+async def on_action_scan_dq(action: cl.Action) -> None:
+    """[🔍 Quét lại toàn diện DQ] — quét kiểm tra trực tiếp trên DuckDB cả 3 nguồn."""
+    await action.remove()
+    sources_status = await run_in_threadpool(scan_all_sources_status)
+    matrix_md = render_multi_source_matrix(sources_status)
+    total_viols = sum(s.get("viol_cnt", 0) for s in sources_status)
+
+    if total_viols == 0:
+        await cl.Message(
+            author=AUTHOR_SYSTEM,
+            content=f"### 🔍 Kết Quả Quét Data Quality Toàn Diện\n\n{matrix_md}\n\n🟢 **Tất cả các nguồn dữ liệu đều hoàn toàn sạch (0 vi phạm)!**",
+            actions=healthy_action_chips(),
+        ).send()
+    else:
+        await cl.Message(
+            author=AUTHOR_SYSTEM,
+            content=f"### 🚨 Phát Hiện Lỗi Dữ Liệu Khi Quét DQ!\n\n{matrix_md}\n\nĐang tự động khởi tạo luồng SRE điều tra...",
+        ).send()
+        payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident)
+        if payload:
+            incident = IncidentInput(**payload)
+            evidence = getattr(incident, "evidence_payload", {}) or {}
+            source_sys = str(evidence.get("source_system", "web_checkout") if isinstance(evidence, dict) else "web_checkout")
+            cl.user_session.set("incident_id", incident.incident_id)
+            await _start_investigation_flow(incident, source_sys, preloaded_report=preloaded_report, source_note=source_note)
+
+
+@cl.action_callback("action_data_profile")
+async def on_action_data_profile(action: cl.Action) -> None:
+    """[📊 Xem Data Profile] — xem số liệu thực tế trên DuckDB."""
+    await action.remove()
+
+    def _get_profile() -> tuple[Any, List[Any]]:
+        con = tools.get_connection()
+        row = con.execute("""
+            SELECT 
+                COUNT(*) as total_rows,
+                COUNT(DISTINCT source_system) as sources_count,
+                MIN(order_date) as min_ts,
+                MAX(order_date) as max_ts,
+                COALESCE(SUM(total_amount), 0) as total_revenue,
+                COUNT(CASE WHEN order_status = 'COMPLETED' THEN 1 END) as completed_cnt
+            FROM fact_orders
+        """).fetchone()
+        src_rows = con.execute("""
+            SELECT 
+                source_system, 
+                COUNT(*) as cnt, 
+                COUNT(CASE WHEN customer_id IS NULL THEN 1 END) as null_cust, 
+                COUNT(CASE WHEN total_amount < 0 THEN 1 END) as neg_amt
+            FROM fact_orders
+            GROUP BY source_system
+            ORDER BY source_system
+        """).fetchall()
+        return row, src_rows
+
+    row, src_rows = await run_in_threadpool(_get_profile)
+    profile_md = (
+        f"### 📊 Data Profile Snapshot — `main.fact_orders`\n\n"
+        f"- 📦 **Tổng số bản ghi**: `{row[0]:,}` dòng\n"
+        f"- 🌐 **Số nguồn active**: `{row[1]}` nguồn\n"
+        f"- 📅 **Khoảng thời gian**: `{row[2]}` → `{row[3]}`\n"
+        f"- 💵 **Tổng doanh thu ghi nhận**: `${row[4]:,.2f}`\n"
+        f"- ✅ **Đơn hoàn thành**: `{row[5]:,}` đơn\n\n"
+        f"**Phân bổ chi tiết theo từng nguồn:**\n\n"
+        f"| Nguồn dữ liệu | Tổng số dòng | Lỗi NULL customer | Lỗi Amount âm |\n"
+        f"| :--- | :--- | :--- | :--- |"
+    )
+    for src in src_rows:
+        profile_md += f"\n| `{src[0]}` | {src[1]:,} | {src[2]} | {src[3]} |"
+
+    await cl.Message(
+        author=AUTHOR_SYSTEM,
+        content=profile_md,
+        actions=healthy_action_chips(),
+    ).send()
+
+
+@cl.action_callback("action_inject_defect")
+async def on_action_inject_defect(action: cl.Action) -> None:
+    """[⚡ Cấy Lỗi Mẫu Để Thử Nghiệm] — chủ động sinh lỗi dữ liệu thực tế."""
+    await action.remove()
+    target_source = (action.payload or {}).get("source") or "mobile_app_v3"
+    if target_source in ("auto", "all"):
+        target_source = "mobile_app_v3"
+
+    defect_type = (
+        "null_customer_id"
+        if target_source == "mobile_app_v3"
+        else ("negative_amount" if target_source == "web_checkout" else "duplicate_order")
+    )
+
+    thinking = cl.Message(
+        author=AUTHOR_SYSTEM,
+        content=f"⚡ Đang cấy 15 dòng lỗi mẫu (`{defect_type}`) vào nguồn `{target_source}` để thử nghiệm...",
+    )
+    await thinking.send()
+
+    from data.jobs.inject_defect import inject_custom_defect
+    res = await run_in_threadpool(
+        inject_custom_defect,
+        source=target_source,
+        defect_type=defect_type,
+        rows=15,
+        notify=True,
+    )
+
+    thinking.content = (
+        f"🚨 **Đã cấy thành công {res.get('total_injected_rows', 15)} dòng lỗi vào nguồn `{target_source}`!**\n\n"
+        f"Hệ thống phát hiện vi phạm và đang khởi tạo luồng SRE điều tra tự động..."
+    )
+    await thinking.update()
+
+    payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident_for_source, target_source)
+    if payload:
+        incident = IncidentInput(**payload)
+        evidence = getattr(incident, "evidence_payload", {}) or {}
+        source_sys = str(evidence.get("source_system", target_source) if isinstance(evidence, dict) else target_source)
+        cl.user_session.set("incident_id", incident.incident_id)
+        await _start_investigation_flow(incident, source_sys, preloaded_report=preloaded_report, source_note=source_note)
+
+
+@cl.action_callback("switch_source")
+async def on_switch_source(action: cl.Action) -> None:
+    """[📱 Chuyển Nguồn] — Xem trạng thái hoặc sự cố riêng biệt của từng nguồn."""
+    await action.remove()
+    source_key = (action.payload or {}).get("source") or action.value or "web_checkout"
+
+    payload, preloaded_report, source_note = await run_in_threadpool(_resolve_incident_for_source, source_key)
+    if source_note == "clean" or payload is None:
+        sources_data = await run_in_threadpool(scan_all_sources_status)
+        agent: Optional[DataReliabilityAgent] = cl.user_session.get("agent")
+        maker_model = agent.settings.model if agent else "?"
+        checker_settings = LLMSettings.for_auditor(avoid_model=maker_model)
+
+        welcome_text = render_healthy_landing_card(
+            source_key=source_key,
+            sources_data=sources_data,
+            maker_model=maker_model,
+            checker_model=checker_settings.model,
+        )
+        await cl.Message(
+            author=AUTHOR_SYSTEM,
+            content=welcome_text,
+            actions=healthy_action_chips(source_key),
+        ).send()
+        return
+
+    incident = IncidentInput(**payload)
+    evidence = getattr(incident, "evidence_payload", {}) or {}
+    source_sys = str(evidence.get("source_system", source_key) if isinstance(evidence, dict) else source_key)
+    cl.user_session.set("incident_id", incident.incident_id)
+    await _start_investigation_flow(incident, source_sys, preloaded_report=preloaded_report, source_note=source_note)
+

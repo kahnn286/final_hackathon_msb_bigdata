@@ -383,14 +383,50 @@ async def inject_demo_incident(
 
 
 @ui_router.post("/select-source-incident")
-async def select_source_incident_endpoint(source: str = "mobile_app_v3") -> Dict[str, Any]:
+async def select_source_incident_endpoint(source: str = "web_checkout") -> Dict[str, Any]:
     """Chọn hoặc tạo hồ sơ sự cố cho nguồn được chỉ định để Copilot nạp ngay lập tức."""
     from data import incident_store
     from data.incidents import build_incident_payload, build_sample_incident_payload
     from data.connection import CONN_LOCK, get_connection
     import json
 
-    # 1. Kiểm tra xem có incident nào đang mở của nguồn này không
+    # 1. Lưu nguồn đang chọn vào ui_state
+    ui_state.set_state(selected_source=source)
+
+    # 2. Kiểm tra số lỗi thực tế của nguồn này trên fact_orders
+    con = get_connection()
+    viol_cnt = 0
+    with CONN_LOCK:
+        try:
+            r = con.execute(
+                """
+                SELECT COUNT(*) FROM fact_orders 
+                WHERE source_system = ? 
+                AND (
+                    customer_id IS NULL 
+                    OR customer_email IS NULL 
+                    OR total_amount <= 0 
+                    OR order_status NOT IN ('COMPLETED', 'PENDING', 'CANCELLED', 'REFUNDED')
+                )
+                """,
+                [source],
+            ).fetchone()
+            viol_cnt = int(r[0]) if r else 0
+        except Exception:
+            viol_cnt = 0
+
+    # Nếu nguồn hoàn toàn sạch (0 lỗi) và không có sự cố thực sự
+    if viol_cnt == 0:
+        incident_store.clear_selection()
+        return {
+            "ok": True,
+            "source": source,
+            "status": "healthy",
+            "incident_id": None,
+            "message": f"Nguồn {source} đang sạch 100% (0 vi phạm)",
+        }
+
+    # 2. Nếu có lỗi, kiểm tra xem có incident nào đang mở của nguồn này không
     all_open = incident_store.list_incidents(status=None, limit=20)
     target_inc_id = None
     for inc in all_open:
@@ -401,7 +437,7 @@ async def select_source_incident_endpoint(source: str = "mobile_app_v3") -> Dict
                 target_inc_id = str(inc["incident_id"])
                 break
 
-    # 2. Nếu chưa có, tạo incident mới dựa trên DQ checks hiện tại
+    # 3. Nếu có lỗi thật mà chưa có ticket, tạo incident mới
     if not target_inc_id:
         now_ts = datetime.now(timezone.utc)
         target_inc_id = f"INC-{now_ts.strftime('%Y%m%d-%H%M%S')}"
@@ -417,10 +453,9 @@ async def select_source_incident_endpoint(source: str = "mobile_app_v3") -> Dict
                 "source_system": source,
                 "source_version": "v2.1.0" if source == "erp_core" else ("v1.8.4" if source == "web_checkout" else "v3.4.1")
             }
-            envelope["description"] = f"Phát hiện sự cố DQ trên nguồn [{source}]: kiểm tra dữ liệu fact_orders"
+            envelope["description"] = f"Phát hiện {viol_cnt} dòng vi phạm DQ trên nguồn [{source}] trong bảng fact_orders"
 
         try:
-            con = get_connection()
             with CONN_LOCK:
                 con.execute(
                     """
@@ -433,8 +468,8 @@ async def select_source_incident_endpoint(source: str = "mobile_app_v3") -> Dict
                     """,
                     [
                         target_inc_id, f"job_ingest_{source}", f"run_{now_ts.strftime('%Y%m%d%H%M%S')}", now_ts, now_ts, "WAITING_FOR_APPROVAL",
-                        "HIGH", "fact_orders", "source_not_null_warehouse_fact_orders_customer_id", "customer_id", "not_null", 15, 1,
-                        f"Sự cố dữ liệu trên nguồn {source}",
+                        "HIGH", "fact_orders", "source_dq_fact_orders", "multiple", "custom", viol_cnt, 1,
+                        f"Sự cố dữ liệu trên nguồn {source} ({viol_cnt} vi phạm)",
                         json.dumps(envelope, ensure_ascii=False, default=str), None, None, None,
                         "", 0, False, None,
                     ],
@@ -442,14 +477,17 @@ async def select_source_incident_endpoint(source: str = "mobile_app_v3") -> Dict
         except Exception as e:
             print(f"[WARN] Failed to insert source incident: {e}")
 
-    # 3. Chọn incident cho phiên chat kế tiếp
-    incident_store.select_incident(target_inc_id)
-    ui_state.set_state(
-        incident_id=target_inc_id,
-        status="WAITING_FOR_APPROVAL",
-        maker="idle",
-    )
-    return {"ok": True, "incident_id": target_inc_id, "source": source}
+    # 4. Chọn incident cho phiên chat kế tiếp
+    if target_inc_id:
+        incident_store.select_incident(target_inc_id)
+
+    return {
+        "ok": True,
+        "source": source,
+        "incident_id": target_inc_id,
+        "status": "incident",
+        "violations": viol_cnt,
+    }
 
 
 @ui_router.post("/demo/reset-clean")

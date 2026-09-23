@@ -110,14 +110,13 @@ _tables_ready = False
 
 def ensure_wap_tables() -> None:
     """Tạo bảng registry nếu chưa có. Idempotent, gọi bao nhiêu lần cũng được."""
-    global _tables_ready
-    if _tables_ready:
-        return
-    con = get_connection()
-    with CONN_LOCK:
-        for ddl in _DDL:
-            con.execute(ddl)
-    _tables_ready = True
+    try:
+        con = get_connection()
+        with CONN_LOCK:
+            for ddl in _DDL:
+                con.execute(ddl)
+    except Exception as e:
+        print(f"[WARN] ensure_wap_tables error: {e}")
 
 
 def _now() -> datetime:
@@ -499,6 +498,7 @@ def update_session(incident_id: str, **fields: Any) -> None:
 
 
 def _insert_session(session: Dict[str, Any]) -> None:
+    ensure_wap_tables()
     con = get_connection()
     with CONN_LOCK:
         con.execute(

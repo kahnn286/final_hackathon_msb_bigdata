@@ -20,4 +20,4 @@ data/dbt/logs/
 # Chainlit runtime (scope web)
 .chainlit/
 .files/
-.md
+.md"dra-app.tar" 

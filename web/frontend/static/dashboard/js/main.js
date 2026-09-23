@@ -102,6 +102,11 @@ function initNotifications() {
       if (data.ok) {
         showToast(`🚨 Đã cấy ${data.total_injected_rows || 15} dòng lỗi vào [${source}]! Telegram đã nhận alert.`, 'danger');
         await refreshData();
+        // Tự động chuyển Copilot sang nguồn vừa có lỗi để AI điều tra ngay lập tức
+        const targetSrc = (source === 'all' || source === 'auto') ? 'web_checkout' : source;
+        if (window.openCopilotWithContext) {
+          window.openCopilotWithContext(targetSrc);
+        }
       } else {
         showToast(`❌ Không thể cấy lỗi: ${data.error || 'Lỗi server'}`, 'danger');
       }
@@ -117,10 +122,11 @@ function initNotifications() {
       const resp = await fetch('/ui/demo/reset-clean', { method: 'POST' });
       const data = await resp.json();
       if (data.ok) {
-        showToast(`✅ Đã khôi phục kho dữ liệu sạch hoàn toàn!`, 'success');
+        showToast(`✅ Đã reset kho dữ liệu sạch 100%!`, 'success');
         await refreshData();
-      } else {
-        showToast(`❌ Lỗi reset: ${data.error || 'Lỗi server'}`, 'danger');
+        if (window.openCopilotWithContext) {
+          window.openCopilotWithContext('web_checkout');
+        }
       }
     } catch (err) {
       console.error('Lỗi khi reset:', err);
@@ -196,13 +202,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Polling loop controller
+  let pollTimer = null;
+  function startPolling(ms) {
+    if (pollTimer) clearInterval(pollTimer);
+    if (ms > 0) {
+      pollTimer = setInterval(() => {
+        if (!document.hidden) {
+          refreshData();
+        }
+      }, ms);
+    }
+  }
+
+  const scanSelect = document.getElementById('selectScanInterval');
+  let currentInterval = parseInt(localStorage.getItem('dra_scan_interval') || '4000', 10);
+  if (scanSelect) {
+    scanSelect.value = String(currentInterval);
+    scanSelect.addEventListener('change', (e) => {
+      const ms = parseInt(e.target.value, 10);
+      localStorage.setItem('dra_scan_interval', ms);
+      startPolling(ms);
+      showToast(ms > 0 ? `⏱️ Đã đổi chu kỳ tự quét: ${ms / 1000}s` : `⏸️ Đã tạm dừng tự động quét`, 'info');
+    });
+  }
+
   // Initial load
   refreshData();
-
-  // Polling loop
-  setInterval(() => {
-    if (!document.hidden) {
-      refreshData();
-    }
-  }, 4000);
+  startPolling(currentInterval);
 });
+
